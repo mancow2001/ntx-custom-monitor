@@ -1,425 +1,488 @@
 #!/usr/bin/env python3
 """
-Nutanix Prism Central SNMP Daemon
+Nutanix SNMP Daemon - Main Module
 
-This daemon collects performance statistics from Nutanix Prism Central
-and exposes them via SNMPv3 for monitoring tools like SolarWinds, ScienceLogic, etc.
+This is the main daemon that orchestrates data collection and SNMP exposure.
 """
 
 import asyncio
-import json
-import logging
 import signal
 import sys
 import time
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Any
+import logging
 import threading
-import configparser
 import os
+from datetime import datetime
+from typing import Optional
 
-# Third-party imports (install via pip)
-import requests
-import urllib3
-from pysnmp.entity import engine, config
-from pysnmp.entity.rfc3413 import cmdrsp, context
-from pysnmp.carrier.asyncore import dgram
-from pysnmp.smi import builder, view, compiler
-from pysnmp.proto.api import v2c
-from pysnmp import debug
+from config_manager import ConfigManager
+from nutanix_api import NutanixAPIClient, NutanixAPIError
+from metrics_collector import MetricsCollector
+from snmp_agent import SNMPAgent, SNMPAgentError
 
-# Disable SSL warnings for self-signed certificates
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('/var/log/nutanix_snmp_daemon.log'),
-        logging.StreamHandler(sys.stdout)
-    ]
-)
 logger = logging.getLogger(__name__)
 
-class NutanixAPI:
-    """Handles communication with Nutanix Prism Central API"""
+class HealthMonitor:
+    """Monitors the health of daemon components"""
     
-    def __init__(self, prism_central_ip: str, username: str, password: str, port: int = 9440):
-        self.base_url = f"https://{prism_central_ip}:{port}/api/nutanix/v3"
-        self.auth = (username, password)
-        self.session = requests.Session()
-        self.session.verify = False
-        self.session.auth = self.auth
+    def __init__(self, config: dict):
+        self.config = config
+        self.monitoring_config = config.get('monitoring', {})
+        self.enabled = self.monitoring_config.get('enable_health_checks', True)
+        self.check_interval = self.monitoring_config.get('health_check_interval', 300)
         
-    def _make_request(self, method: str, endpoint: str, data: dict = None) -> Optional[dict]:
-        """Make HTTP request to Nutanix API"""
-        url = f"{self.base_url}/{endpoint}"
-        headers = {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json'
+        self.last_check = None
+        self.health_status = {
+            'api_client': False,
+            'metrics_collector': False,
+            'snmp_agent': False,
+            'overall': False
         }
         
-        try:
-            if method.upper() == 'GET':
-                response = self.session.get(url, headers=headers, timeout=30)
-            elif method.upper() == 'POST':
-                response = self.session.post(url, headers=headers, json=data, timeout=30)
-            else:
-                raise ValueError(f"Unsupported HTTP method: {method}")
-                
-            response.raise_for_status()
-            return response.json()
-            
-        except requests.exceptions.RequestException as e:
-            logger.error(f"API request failed: {e}")
-            return None
-    
-    def get_clusters(self) -> List[Dict]:
-        """Get list of all clusters"""
-        data = {"kind": "cluster"}
-        response = self._make_request("POST", "clusters/list", data)
-        return response.get("entities", []) if response else []
-    
-    def get_hosts(self) -> List[Dict]:
-        """Get list of all hosts"""
-        data = {"kind": "host"}
-        response = self._make_request("POST", "hosts/list", data)
-        return response.get("entities", []) if response else []
-    
-    def get_vms(self) -> List[Dict]:
-        """Get list of all VMs"""
-        data = {"kind": "vm"}
-        response = self._make_request("POST", "vms/list", data)
-        return response.get("entities", []) if response else []
-    
-    def get_cluster_stats(self, cluster_uuid: str) -> Optional[Dict]:
-        """Get performance statistics for a specific cluster"""
-        endpoint = f"clusters/{cluster_uuid}/stats"
-        return self._make_request("GET", endpoint)
-    
-    def get_host_stats(self, host_uuid: str) -> Optional[Dict]:
-        """Get performance statistics for a specific host"""
-        endpoint = f"hosts/{host_uuid}/stats"
-        return self._make_request("GET", endpoint)
-
-class PerformanceCollector:
-    """Collects and processes performance statistics"""
-    
-    def __init__(self, nutanix_api: NutanixAPI):
-        self.api = nutanix_api
-        self.stats_cache = {}
-        self.last_update = None
-        self.collection_interval = 60  # seconds
+    def check_health(self, api_client, collector, snmp_agent) -> dict:
+        """Perform health checks on all components"""
+        if not self.enabled:
+            return {'enabled': False}
         
-    async def collect_all_stats(self) -> Dict:
-        """Collect performance statistics from all clusters and hosts"""
-        stats = {
-            'clusters': {},
-            'hosts': {},
-            'timestamp': datetime.now().isoformat()
+        health = {
+            'timestamp': datetime.now().isoformat(),
+            'enabled': True,
+            'components': {}
         }
         
-        # Collect cluster statistics
-        clusters = self.api.get_clusters()
-        for cluster in clusters:
-            cluster_uuid = cluster.get('metadata', {}).get('uuid')
-            cluster_name = cluster.get('spec', {}).get('name', 'Unknown')
-            
-            if cluster_uuid:
-                cluster_stats = self.api.get_cluster_stats(cluster_uuid)
-                if cluster_stats:
-                    stats['clusters'][cluster_uuid] = {
-                        'name': cluster_name,
-                        'stats': self._process_cluster_stats(cluster_stats)
-                    }
-        
-        # Collect host statistics
-        hosts = self.api.get_hosts()
-        for host in hosts:
-            host_uuid = host.get('metadata', {}).get('uuid')
-            host_name = host.get('spec', {}).get('name', 'Unknown')
-            
-            if host_uuid:
-                host_stats = self.api.get_host_stats(host_uuid)
-                if host_stats:
-                    stats['hosts'][host_uuid] = {
-                        'name': host_name,
-                        'stats': self._process_host_stats(host_stats)
-                    }
-        
-        self.stats_cache = stats
-        self.last_update = datetime.now()
-        return stats
-    
-    def _process_cluster_stats(self, raw_stats: Dict) -> Dict:
-        """Process and normalize cluster statistics"""
-        processed = {}
-        
-        # Extract key metrics
-        if 'hypervisor_cpu_usage_ppm' in raw_stats:
-            processed['cpu_usage_percent'] = raw_stats['hypervisor_cpu_usage_ppm'] / 10000
-        
-        if 'hypervisor_memory_usage_ppm' in raw_stats:
-            processed['memory_usage_percent'] = raw_stats['hypervisor_memory_usage_ppm'] / 10000
-        
-        if 'controller_avg_io_latency_usecs' in raw_stats:
-            processed['avg_io_latency_ms'] = raw_stats['controller_avg_io_latency_usecs'] / 1000
-        
-        if 'controller_avg_read_io_latency_usecs' in raw_stats:
-            processed['avg_read_latency_ms'] = raw_stats['controller_avg_read_io_latency_usecs'] / 1000
-        
-        if 'controller_avg_write_io_latency_usecs' in raw_stats:
-            processed['avg_write_latency_ms'] = raw_stats['controller_avg_write_io_latency_usecs'] / 1000
-        
-        if 'controller_io_bandwidth_kBps' in raw_stats:
-            processed['io_bandwidth_mbps'] = raw_stats['controller_io_bandwidth_kBps'] / 1024
-        
-        if 'controller_num_iops' in raw_stats:
-            processed['iops'] = raw_stats['controller_num_iops']
-        
-        return processed
-    
-    def _process_host_stats(self, raw_stats: Dict) -> Dict:
-        """Process and normalize host statistics"""
-        processed = {}
-        
-        # Extract key metrics
-        if 'hypervisor_cpu_usage_ppm' in raw_stats:
-            processed['cpu_usage_percent'] = raw_stats['hypervisor_cpu_usage_ppm'] / 10000
-        
-        if 'hypervisor_memory_usage_ppm' in raw_stats:
-            processed['memory_usage_percent'] = raw_stats['hypervisor_memory_usage_ppm'] / 10000
-        
-        if 'controller_avg_io_latency_usecs' in raw_stats:
-            processed['avg_io_latency_ms'] = raw_stats['controller_avg_io_latency_usecs'] / 1000
-        
-        if 'controller_io_bandwidth_kBps' in raw_stats:
-            processed['io_bandwidth_mbps'] = raw_stats['controller_io_bandwidth_kBps'] / 1024
-        
-        if 'controller_num_iops' in raw_stats:
-            processed['iops'] = raw_stats['controller_num_iops']
-        
-        if 'hypervisor_num_vms' in raw_stats:
-            processed['num_vms'] = raw_stats['hypervisor_num_vms']
-        
-        return processed
-
-class SNMPAgent:
-    """SNMP v3 Agent that exposes Nutanix performance data"""
-    
-    # Custom OID base (you should register your own OID)
-    BASE_OID = '1.3.6.1.4.1.99999.1'  # Example private enterprise OID
-    
-    def __init__(self, bind_ip: str = '0.0.0.0', bind_port: int = 161, 
-                 username: str = 'nutanix', auth_key: str = 'authkey123', 
-                 priv_key: str = 'privkey123'):
-        self.bind_ip = bind_ip
-        self.bind_port = bind_port
-        self.username = username
-        self.auth_key = auth_key
-        self.priv_key = priv_key
-        
-        self.snmp_engine = engine.SnmpEngine()
-        self.performance_data = {}
-        
-        self._setup_snmp_engine()
-    
-    def _setup_snmp_engine(self):
-        """Configure SNMP engine with SNMPv3 settings"""
-        
-        # Setup transport endpoint
-        config.addTransport(
-            self.snmp_engine,
-            dgram.domainName,
-            dgram.UdpTransport().openServerMode((self.bind_ip, self.bind_port))
-        )
-        
-        # Setup SNMPv3 user with authentication and privacy
-        config.addV3User(
-            self.snmp_engine,
-            self.username,
-            config.usmHMACMD5AuthProtocol, self.auth_key,
-            config.usmDESPrivProtocol, self.priv_key
-        )
-        
-        # Setup context
-        config.addContext(self.snmp_engine, '')
-        
-        # Register SNMP application
-        cmdrsp.GetCommandResponder(self.snmp_engine, context.SnmpContext(self.snmp_engine))
-        
-        # Setup MIB builder
-        self.mib_builder = builder.MibBuilder()
-        self.mib_view = view.MibViewController(self.mib_builder)
-        
-        logger.info(f"SNMP agent configured on {self.bind_ip}:{self.bind_port}")
-    
-    def update_performance_data(self, stats: Dict):
-        """Update the performance data that SNMP agent will serve"""
-        self.performance_data = stats
-        logger.debug("Performance data updated in SNMP agent")
-    
-    def start(self):
-        """Start the SNMP agent"""
-        logger.info("Starting SNMP agent...")
+        # Check API client health
         try:
-            self.snmp_engine.transportDispatcher.runDispatcher()
+            api_healthy = api_client.health_check() if api_client else False
+            health['components']['api_client'] = {
+                'healthy': api_healthy,
+                'consecutive_failures': getattr(api_client, 'consecutive_failures', 0),
+                'last_successful_request': getattr(api_client, 'last_successful_request', None)
+            }
         except Exception as e:
-            logger.error(f"SNMP agent error: {e}")
-    
-    def stop(self):
-        """Stop the SNMP agent"""
-        logger.info("Stopping SNMP agent...")
-        self.snmp_engine.transportDispatcher.closeDispatcher()
+            health['components']['api_client'] = {
+                'healthy': False,
+                'error': str(e)
+            }
+        
+        # Check metrics collector
+        try:
+            collector_stats = collector.get_performance_stats() if collector else {}
+            health['components']['metrics_collector'] = {
+                'healthy': bool(collector_stats),
+                'stats': collector_stats
+            }
+        except Exception as e:
+            health['components']['metrics_collector'] = {
+                'healthy': False,
+                'error': str(e)
+            }
+        
+        # Check SNMP agent
+        try:
+            snmp_healthy = snmp_agent.is_running() if snmp_agent else False
+            snmp_stats = snmp_agent.get_stats() if snmp_agent else {}
+            health['components']['snmp_agent'] = {
+                'healthy': snmp_healthy,
+                'stats': snmp_stats
+            }
+        except Exception as e:
+            health['components']['snmp_agent'] = {
+                'healthy': False,
+                'error': str(e)
+            }
+        
+        # Overall health
+        all_healthy = all(
+            comp.get('healthy', False) 
+            for comp in health['components'].values()
+        )
+        health['overall_healthy'] = all_healthy
+        
+        self.last_check = datetime.now()
+        self.health_status = {
+            comp_name: comp_data.get('healthy', False)
+            for comp_name, comp_data in health['components'].items()
+        }
+        self.health_status['overall'] = all_healthy
+        
+        return health
 
 class NutanixSNMPDaemon:
     """Main daemon class that orchestrates data collection and SNMP exposure"""
     
-    def __init__(self, config_file: str = '/etc/nutanix_snmp_daemon.conf'):
-        self.config_file = config_file
-        self.config = self._load_config()
+    def __init__(self, config_path: Optional[str] = None):
+        # Load configuration
+        self.config_manager = ConfigManager(config_path)
+        self.config = self.config_manager.to_dict()
+        
+        # Setup logging
+        self._setup_logging()
         
         # Initialize components
-        self.nutanix_api = NutanixAPI(
-            self.config['nutanix']['prism_central_ip'],
-            self.config['nutanix']['username'],
-            self.config['nutanix']['password'],
-            int(self.config['nutanix'].get('port', 9440))
-        )
+        self.api_client: Optional[NutanixAPIClient] = None
+        self.collector: Optional[MetricsCollector] = None
+        self.snmp_agent: Optional[SNMPAgent] = None
+        self.health_monitor: Optional[HealthMonitor] = None
         
-        self.collector = PerformanceCollector(self.nutanix_api)
-        
-        self.snmp_agent = SNMPAgent(
-            self.config['snmp']['bind_ip'],
-            int(self.config['snmp']['bind_port']),
-            self.config['snmp']['username'],
-            self.config['snmp']['auth_key'],
-            self.config['snmp']['priv_key']
-        )
-        
+        # Runtime state
         self.running = False
-        self.collection_thread = None
-        self.snmp_thread = None
+        self.collection_thread: Optional[threading.Thread] = None
+        self.snmp_thread: Optional[threading.Thread] = None
+        self.health_thread: Optional[threading.Thread] = None
+        
+        # Statistics
+        self.start_time = None
+        self.collection_count = 0
+        self.last_collection_time = None
+        self.error_count = 0
         
         # Setup signal handlers
         signal.signal(signal.SIGTERM, self._signal_handler)
         signal.signal(signal.SIGINT, self._signal_handler)
+        signal.signal(signal.SIGHUP, self._reload_config)
+        
+        logger.info("Nutanix SNMP Daemon initialized")
     
-    def _load_config(self) -> configparser.ConfigParser:
-        """Load configuration from file"""
-        config = configparser.ConfigParser()
+    def _setup_logging(self):
+        """Setup logging configuration"""
+        daemon_config = self.config.get('daemon', {})
+        log_level = daemon_config.get('log_level', 'INFO').upper()
+        log_file = daemon_config.get('log_file', '/var/log/nutanix_snmp_daemon.log')
         
-        # Default configuration
-        config['nutanix'] = {
-            'prism_central_ip': '10.1.1.100',
-            'username': 'admin',
-            'password': 'password',
-            'port': '9440'
-        }
+        # Configure root logger
+        root_logger = logging.getLogger()
+        root_logger.setLevel(getattr(logging, log_level, logging.INFO))
         
-        config['snmp'] = {
-            'bind_ip': '0.0.0.0',
-            'bind_port': '161',
-            'username': 'nutanix',
-            'auth_key': 'authkey123',
-            'priv_key': 'privkey123'
-        }
+        # Clear existing handlers
+        for handler in root_logger.handlers[:]:
+            root_logger.removeHandler(handler)
         
-        config['daemon'] = {
-            'collection_interval': '60',
-            'log_level': 'INFO'
-        }
+        # Create formatter
+        formatter = logging.Formatter(
+            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        )
         
-        # Load from file if exists
-        if os.path.exists(self.config_file):
-            config.read(self.config_file)
-            logger.info(f"Configuration loaded from {self.config_file}")
-        else:
-            # Create default config file
-            with open(self.config_file, 'w') as f:
-                config.write(f)
-            logger.info(f"Default configuration created at {self.config_file}")
+        # File handler
+        try:
+            file_handler = logging.FileHandler(log_file)
+            file_handler.setFormatter(formatter)
+            root_logger.addHandler(file_handler)
+        except Exception as e:
+            print(f"Warning: Could not setup file logging: {e}")
         
-        return config
+        # Console handler
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setFormatter(formatter)
+        root_logger.addHandler(console_handler)
+        
+        logger.info(f"Logging configured: level={log_level}, file={log_file}")
     
     def _signal_handler(self, signum, frame):
         """Handle shutdown signals"""
         logger.info(f"Received signal {signum}, shutting down...")
         self.stop()
     
+    def _reload_config(self, signum, frame):
+        """Handle configuration reload signal (SIGHUP)"""
+        logger.info("Received SIGHUP, reloading configuration...")
+        try:
+            self.config_manager.reload()
+            self.config = self.config_manager.to_dict()
+            self._setup_logging()
+            logger.info("Configuration reloaded successfully")
+        except Exception as e:
+            logger.error(f"Failed to reload configuration: {e}")
+    
+    def _initialize_components(self):
+        """Initialize all daemon components"""
+        try:
+            # Initialize API client
+            nutanix_config = self.config.get('nutanix', {})
+            self.api_client = NutanixAPIClient(nutanix_config)
+            logger.info("Nutanix API client initialized")
+            
+            # Initialize metrics collector
+            self.collector = MetricsCollector(self.api_client, self.config)
+            logger.info("Metrics collector initialized")
+            
+            # Initialize SNMP agent
+            self.snmp_agent = SNMPAgent(self.config)
+            logger.info("SNMP agent initialized")
+            
+            # Initialize health monitor
+            self.health_monitor = HealthMonitor(self.config)
+            logger.info("Health monitor initialized")
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize components: {e}")
+            raise
+    
     def _collection_worker(self):
         """Background worker for collecting performance data"""
-        collection_interval = int(self.config['daemon']['collection_interval'])
+        daemon_config = self.config.get('daemon', {})
+        collection_interval = daemon_config.get('collection_interval', 60)
+        
+        logger.info(f"Collection worker started (interval: {collection_interval}s)")
         
         while self.running:
             try:
                 start_time = time.time()
                 
                 # Collect performance statistics
-                logger.info("Collecting performance statistics...")
+                logger.info("Starting metrics collection...")
+                
+                # Create new event loop for this thread
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
-                stats = loop.run_until_complete(self.collector.collect_all_stats())
-                loop.close()
                 
-                # Update SNMP agent with new data
-                self.snmp_agent.update_performance_data(stats)
-                
-                collection_time = time.time() - start_time
-                logger.info(f"Statistics collection completed in {collection_time:.2f} seconds")
+                try:
+                    stats = loop.run_until_complete(self.collector.collect_all_stats())
+                    
+                    # Update SNMP agent with new data
+                    self.snmp_agent.update_performance_data(stats)
+                    
+                    # Update statistics
+                    self.collection_count += 1
+                    self.last_collection_time = datetime.now()
+                    
+                    collection_time = time.time() - start_time
+                    logger.info(f"Metrics collection completed in {collection_time:.2f}s")
+                    
+                    # Log collection summary
+                    cluster_count = len(stats.get('clusters', {}))
+                    host_count = len(stats.get('hosts', {}))
+                    vm_count = len(stats.get('vms', {}))
+                    logger.info(f"Collected metrics: {cluster_count} clusters, {host_count} hosts, {vm_count} VMs")
+                    
+                finally:
+                    loop.close()
                 
                 # Sleep for remaining interval time
-                sleep_time = max(0, collection_interval - collection_time)
-                time.sleep(sleep_time)
+                sleep_time = max(0, collection_interval - (time.time() - start_time))
+                if sleep_time > 0:
+                    time.sleep(sleep_time)
                 
             except Exception as e:
+                self.error_count += 1
                 logger.error(f"Error in collection worker: {e}")
-                time.sleep(30)  # Wait 30 seconds before retrying
+                # Wait before retrying
+                time.sleep(min(30, collection_interval / 2))
+        
+        logger.info("Collection worker stopped")
     
     def _snmp_worker(self):
         """Background worker for SNMP agent"""
+        logger.info("SNMP worker starting...")
+        
         try:
             self.snmp_agent.start()
         except Exception as e:
+            self.error_count += 1
             logger.error(f"SNMP worker error: {e}")
+        finally:
+            logger.info("SNMP worker stopped")
+    
+    def _health_worker(self):
+        """Background worker for health monitoring"""
+        if not self.health_monitor.enabled:
+            logger.info("Health monitoring disabled")
+            return
+        
+        logger.info(f"Health monitor started (interval: {self.health_monitor.check_interval}s)")
+        
+        while self.running:
+            try:
+                health = self.health_monitor.check_health(
+                    self.api_client, self.collector, self.snmp_agent
+                )
+                
+                if not health.get('overall_healthy', False):
+                    logger.warning("System health check failed")
+                    if self.config.get('monitoring', {}).get('alert_on_connection_failure', True):
+                        self._handle_health_alert(health)
+                else:
+                    logger.debug("System health check passed")
+                
+                # Sleep until next check
+                time.sleep(self.health_monitor.check_interval)
+                
+            except Exception as e:
+                logger.error(f"Error in health worker: {e}")
+                time.sleep(60)  # Wait before retrying
+        
+        logger.info("Health monitor stopped")
+    
+    def _handle_health_alert(self, health: dict):
+        """Handle health check alerts"""
+        # Log detailed health status
+        for component, status in health.get('components', {}).items():
+            if not status.get('healthy', False):
+                error = status.get('error', 'Unknown error')
+                logger.error(f"Component {component} is unhealthy: {error}")
+        
+        # Could implement additional alerting here (email, webhook, etc.)
     
     def start(self):
         """Start the daemon"""
+        if self.running:
+            logger.warning("Daemon is already running")
+            return
+        
         logger.info("Starting Nutanix SNMP Daemon...")
-        self.running = True
+        self.start_time = datetime.now()
         
-        # Start collection thread
-        self.collection_thread = threading.Thread(target=self._collection_worker, daemon=True)
-        self.collection_thread.start()
-        
-        # Start SNMP agent thread
-        self.snmp_thread = threading.Thread(target=self._snmp_worker, daemon=True)
-        self.snmp_thread.start()
-        
-        logger.info("Daemon started successfully")
-        
-        # Keep main thread alive
         try:
-            while self.running:
-                time.sleep(1)
-        except KeyboardInterrupt:
+            # Initialize components
+            self._initialize_components()
+            
+            # Test API connectivity
+            if not self.api_client.health_check():
+                logger.error("Initial API health check failed")
+                if not self.config.get('debug', {}).get('test_mode', False):
+                    raise RuntimeError("Cannot start daemon - API connection failed")
+            
+            # Set running flag
+            self.running = True
+            
+            # Start worker threads
+            self.collection_thread = threading.Thread(
+                target=self._collection_worker, 
+                daemon=True, 
+                name="CollectionWorker"
+            )
+            self.collection_thread.start()
+            
+            self.snmp_thread = threading.Thread(
+                target=self._snmp_worker, 
+                daemon=True, 
+                name="SNMPWorker"
+            )
+            self.snmp_thread.start()
+            
+            self.health_thread = threading.Thread(
+                target=self._health_worker, 
+                daemon=True, 
+                name="HealthWorker"
+            )
+            self.health_thread.start()
+            
+            logger.info("Daemon started successfully")
+            
+            # Keep main thread alive
+            try:
+                while self.running:
+                    time.sleep(1)
+            except KeyboardInterrupt:
+                logger.info("Received keyboard interrupt")
+                self.stop()
+                
+        except Exception as e:
+            logger.error(f"Failed to start daemon: {e}")
             self.stop()
+            raise
     
     def stop(self):
         """Stop the daemon"""
+        if not self.running:
+            return
+        
         logger.info("Stopping daemon...")
         self.running = False
         
+        # Stop SNMP agent
         if self.snmp_agent:
-            self.snmp_agent.stop()
+            try:
+                self.snmp_agent.stop()
+            except Exception as e:
+                logger.error(f"Error stopping SNMP agent: {e}")
+        
+        # Close API client
+        if self.api_client:
+            try:
+                self.api_client.close()
+            except Exception as e:
+                logger.error(f"Error closing API client: {e}")
+        
+        # Wait for threads to finish
+        for thread in [self.collection_thread, self.snmp_thread, self.health_thread]:
+            if thread and thread.is_alive():
+                thread.join(timeout=5)
         
         logger.info("Daemon stopped")
+    
+    def get_status(self) -> dict:
+        """Get daemon status information"""
+        uptime = None
+        if self.start_time:
+            uptime = (datetime.now() - self.start_time).total_seconds()
+        
+        status = {
+            'running': self.running,
+            'start_time': self.start_time.isoformat() if self.start_time else None,
+            'uptime_seconds': uptime,
+            'collection_count': self.collection_count,
+            'last_collection': self.last_collection_time.isoformat() if self.last_collection_time else None,
+            'error_count': self.error_count,
+            'components': {
+                'api_client': bool(self.api_client),
+                'collector': bool(self.collector),
+                'snmp_agent': bool(self.snmp_agent),
+                'health_monitor': bool(self.health_monitor)
+            }
+        }
+        
+        # Add health status if available
+        if self.health_monitor:
+            status['health'] = self.health_monitor.health_status
+        
+        return status
 
 def main():
     """Main entry point"""
-    daemon = NutanixSNMPDaemon()
-    daemon.start()
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='Nutanix SNMP Daemon')
+    parser.add_argument('--config', '-c', help='Configuration file path')
+    parser.add_argument('--test', '-t', action='store_true', help='Test mode (don\'t require API connection)')
+    parser.add_argument('--create-config', help='Create default configuration file at specified path')
+    parser.add_argument('--status', action='store_true', help='Show daemon status and exit')
+    parser.add_argument('--version', action='store_true', help='Show version and exit')
+    
+    args = parser.parse_args()
+    
+    if args.version:
+        print("Nutanix SNMP Daemon v1.0.0")
+        sys.exit(0)
+    
+    if args.create_config:
+        try:
+            ConfigManager.create_default_config(args.create_config)
+            sys.exit(0)
+        except Exception as e:
+            print(f"Error creating configuration: {e}")
+            sys.exit(1)
+    
+    try:
+        daemon = NutanixSNMPDaemon(args.config)
+        
+        if args.test:
+            daemon.config['debug']['test_mode'] = True
+        
+        if args.status:
+            status = daemon.get_status()
+            print("Daemon Status:")
+            for key, value in status.items():
+                print(f"  {key}: {value}")
+            sys.exit(0)
+        
+        daemon.start()
+        
+    except KeyboardInterrupt:
+        logger.info("Interrupted by user")
+        sys.exit(0)
+    except Exception as e:
+        logger.error(f"Daemon failed: {e}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()

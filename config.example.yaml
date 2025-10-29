@@ -1,0 +1,93 @@
+# Nutanix SNMP Daemon Configuration
+# All configuration options for the daemon
+
+# Nutanix Prism Central Configuration
+nutanix:
+  prism_central_ip: "10.1.1.100"
+  username: "admin"
+  password: "nutanix/4u"
+  port: 9440
+  ssl_verify: false
+  timeout: 30
+  retry_count: 3
+  retry_delay: 5
+
+# SNMP Agent Configuration
+snmp:
+  bind_ip: "0.0.0.0"
+  bind_port: 161
+  username: "nutanix_monitor"
+  auth_key: "AuthenticationKey123!"
+  priv_key: "PrivacyKey123!"
+  auth_protocol: "MD5"  # MD5 or SHA
+  priv_protocol: "DES"  # DES or AES
+  base_oid: "1.3.6.1.4.1.99999.1"  # Your registered enterprise OID
+
+# Daemon Configuration
+daemon:
+  collection_interval: 60
+  log_level: "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
+  log_file: "/var/log/nutanix_snmp_daemon.log"
+  pid_file: "/var/run/nutanix_snmp_daemon.pid"
+  user: "nutanix-snmp"
+  group: "nutanix-snmp"
+
+# Metrics Configuration
+metrics:
+  # Cluster metrics to collect
+  cluster:
+    cpu_usage: true
+    memory_usage: true
+    io_latency: true
+    io_bandwidth: true
+    iops: true
+    read_latency: true
+    write_latency: true
+    
+  # Host metrics to collect
+  host:
+    cpu_usage: true
+    memory_usage: true
+    io_latency: true
+    io_bandwidth: true
+    iops: true
+    vm_count: true
+    
+  # VM metrics to collect (future feature)
+  vm:
+    enabled: false
+    cpu_usage: true
+    memory_usage: true
+    disk_usage: true
+
+# Performance and Optimization
+performance:
+  max_concurrent_requests: 10
+  cache_timeout: 30
+  connection_pool_size: 5
+  enable_metrics_cache: true
+
+# Monitoring and Alerting
+monitoring:
+  enable_health_checks: true
+  health_check_interval: 300  # seconds
+  alert_on_connection_failure: true
+  alert_threshold_cpu: 90
+  alert_threshold_memory: 90
+  alert_threshold_latency: 100  # milliseconds
+
+# Security Settings
+security:
+  enable_ssl_verification: false
+  cert_file: ""
+  key_file: ""
+  ca_file: ""
+  allowed_snmp_clients: []  # Empty means all clients allowed
+  # Example: ["192.168.1.0/24", "10.0.0.0/8"]
+
+# Debugging and Development
+debug:
+  enable_api_logging: false
+  enable_snmp_debugging: false
+  dump_raw_metrics: false
+  test_mode: false
