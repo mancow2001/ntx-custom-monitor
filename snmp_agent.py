@@ -3,21 +3,22 @@
 SNMP Agent Module
 
 Implements SNMPv3 agent that exposes Nutanix performance data.
+Uses modern pysnmp 6.x API compatible with Python 3.10+
 """
 
 import logging
 import threading
 import time
+import asyncio
 from typing import Dict, Any, Optional, List, Tuple
 from ipaddress import ip_network, ip_address
 
 from pysnmp.entity import engine, config
 from pysnmp.entity.rfc3413 import cmdrsp, context
-from pysnmp.carrier.asyncore import dgram
-from pysnmp.smi import builder, view, compiler, instrum
+from pysnmp.carrier.asyncio import dgram
+from pysnmp.smi import builder, view, instrum
 from pysnmp.proto.api import v2c
 from pysnmp.proto import rfc1902
-from pysnmp import debug
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +93,7 @@ class NutanixMIBInstrumController(instrum.MibInstrumController):
             return rfc1902.OctetString(str(value))
 
 class SNMPAgent:
-    """SNMP v3 Agent that exposes Nutanix performance data"""
+    """SNMP v3 Agent that exposes Nutanix performance data using modern pysnmp 6.x"""
     
     def __init__(self, config: Dict[str, Any]):
         self.config = config
@@ -115,9 +116,11 @@ class SNMPAgent:
         self.performance_data = {}
         self.data_lock = threading.RLock()
         
-        # SNMP engine
+        # SNMP engine and event loop
         self.snmp_engine = None
         self.running = False
+        self.loop = None
+        self.transport = None
         
         # OID mapping for metrics
         self.oid_tree = {}
@@ -190,25 +193,6 @@ class SNMPAgent:
         base_parts = self.base_oid.split('.')
         
         # Define OID structure
-        # Base OID: 1.3.6.1.4.1.99999.1
-        # ├── 1 (Clusters)
-        # │   ├── 1.{index}.1 (CPU usage)
-        # │   ├── 1.{index}.2 (Memory usage)
-        # │   ├── 1.{index}.3 (IO latency)
-        # │   ├── 1.{index}.4 (IO bandwidth)
-        # │   └── 1.{index}.5 (IOPS)
-        # ├── 2 (Hosts)
-        # │   ├── 1.{index}.1 (CPU usage)
-        # │   ├── 1.{index}.2 (Memory usage)
-        # │   ├── 1.{index}.3 (IO latency)
-        # │   ├── 1.{index}.4 (IO bandwidth)
-        # │   ├── 1.{index}.5 (IOPS)
-        # │   └── 1.{index}.6 (VM count)
-        # └── 3 (VMs)
-        #     ├── 1.{index}.1 (CPU usage)
-        #     ├── 1.{index}.2 (Memory usage)
-        #     └── 1.{index}.3 (Disk usage)
-        
         self.cluster_base = f"{self.base_oid}.1.1"
         self.host_base = f"{self.base_oid}.2.1"
         self.vm_base = f"{self.base_oid}.3.1"
@@ -241,15 +225,13 @@ class SNMPAgent:
         """Configure SNMP engine with SNMPv3 settings"""
         self.snmp_engine = engine.SnmpEngine()
         
-        # Enable debugging if configured
-        if self.config.get('debug', {}).get('enable_snmp_debugging', False):
-            debug.setLogger(debug.Debug('all'))
+        # Setup transport endpoint using asyncio
+        self.transport = dgram.UdpTransport().openServerMode((self.bind_ip, self.bind_port))
         
-        # Setup transport endpoint
         config.addTransport(
             self.snmp_engine,
             dgram.domainName,
-            dgram.UdpTransport().openServerMode((self.bind_ip, self.bind_port))
+            self.transport
         )
         
         # Setup SNMPv3 user with authentication and privacy
@@ -430,7 +412,7 @@ class SNMPAgent:
         logger.debug("Performance data updated in SNMP agent")
     
     def start(self):
-        """Start the SNMP agent"""
+        """Start the SNMP agent using asyncio"""
         if self.running:
             logger.warning("SNMP agent is already running")
             return
@@ -438,16 +420,24 @@ class SNMPAgent:
         logger.info("Starting SNMP agent...")
         
         try:
+            # Create new event loop for this thread
+            self.loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self.loop)
+            
+            # Setup SNMP engine
             self.setup_snmp_engine()
             self.running = True
             
-            # Start the SNMP engine dispatcher
-            self.snmp_engine.transportDispatcher.runDispatcher()
+            # Run the event loop
+            self.loop.run_forever()
             
         except Exception as e:
             logger.error(f"Failed to start SNMP agent: {e}")
             self.running = False
             raise SNMPAgentError(f"SNMP agent startup failed: {e}")
+        finally:
+            if self.loop:
+                self.loop.close()
     
     def stop(self):
         """Stop the SNMP agent"""
@@ -458,8 +448,12 @@ class SNMPAgent:
         self.running = False
         
         try:
-            if self.snmp_engine:
-                self.snmp_engine.transportDispatcher.closeDispatcher()
+            if self.transport:
+                self.transport.closeTransport()
+            
+            if self.loop and self.loop.is_running():
+                self.loop.call_soon_threadsafe(self.loop.stop)
+            
             logger.info("SNMP agent stopped")
         except Exception as e:
             logger.error(f"Error stopping SNMP agent: {e}")

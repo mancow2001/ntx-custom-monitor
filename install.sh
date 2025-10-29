@@ -31,6 +31,7 @@ OPTIONS:
     --keep-config          Keep configuration files during uninstall
     --keep-data            Keep data and log files during uninstall
     --keep-all             Keep both configuration and data during uninstall
+    --fix-dependencies     Fix Python dependency issues
     -v, --version          Show version information
 
 EXAMPLES:
@@ -38,6 +39,7 @@ EXAMPLES:
     $SCRIPT_NAME -u                 # Uninstall completely
     $SCRIPT_NAME -u --keep-config   # Uninstall but keep configuration
     $SCRIPT_NAME -u --keep-all      # Uninstall but keep config and data
+    $SCRIPT_NAME --fix-dependencies # Fix Python import issues
 
 EOF
 }
@@ -247,9 +249,41 @@ setup_python_env() {
     
     # Install Python dependencies
     echo "Installing Python dependencies..."
+    
+    # Install dependencies with explicit order to avoid conflicts
+    echo "Installing ASN.1 libraries..."
+    sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/pip install "pyasn1>=0.4.6,<1.0.0"
+    sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/pip install "pyasn1-modules>=0.2.6,<1.0.0"
+    
+    echo "Installing cryptographic libraries..."
+    sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/pip install "pycryptodomex>=3.9.0,<4.0.0"
+    
+    echo "Installing SNMP libraries..."
+    sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/pip install "pysnmp>=4.4.12,<6.0.0"
+    
+    echo "Installing remaining dependencies..."
     sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/pip install -r requirements.txt
     
-    echo "✓ Python environment configured"
+    # Test critical imports
+    echo "Testing Python imports..."
+    sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/python3 -c "
+try:
+    import yaml
+    import requests
+    from pyasn1.compat.octets import str2octs
+    from pysnmp.entity import engine, config
+    print('✓ All critical imports successful')
+except ImportError as e:
+    print(f'✗ Import error: {e}')
+    exit(1)
+" || {
+        echo "Error: Failed to import required modules"
+        echo "Please check the error messages above and run:"
+        echo "  sudo $0 --fix-dependencies"
+        exit 1
+    }
+    
+    echo "✓ Python environment configured successfully"
 }
 
 # Function to install daemon files
@@ -447,6 +481,97 @@ main() {
             uninstall_daemon "$@"
             exit 0
             ;;
+        --fix-dependencies)
+            fix_dependencies
+            exit 0
+            ;;
+        "")
+            install_daemon
+            ;;
+        *)
+            echo "Error: Unknown option '$1'"
+            echo "Use '$SCRIPT_NAME --help' for usage information."
+            exit 1
+            ;;
+    esac
+}
+
+# Function to fix dependencies
+fix_dependencies() {
+    echo "Fixing Python dependencies..."
+    
+    check_root
+    
+    # Check if virtual environment exists
+    if [ ! -d "$INSTALL_DIR/venv" ]; then
+        echo "Error: Virtual environment not found at $INSTALL_DIR/venv"
+        echo "Please run the full installation first."
+        exit 1
+    fi
+        echo "Error: Virtual environment not found at $INSTALL_DIR/venv"
+        echo "Please run the full installation first."
+        exit 1
+    fi
+    
+    echo "Reinstalling Python dependencies in correct order..."
+    
+    # Upgrade pip first
+    sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/pip install --upgrade pip
+    
+    # Install ASN.1 libraries first
+    echo "Installing ASN.1 libraries..."
+    sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/pip install --force-reinstall "pyasn1>=0.4.6,<1.0.0"
+    sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/pip install --force-reinstall "pyasn1-modules>=0.2.6,<1.0.0"
+    
+    # Install crypto libraries
+    echo "Installing cryptographic libraries..."
+    sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/pip install --force-reinstall "pycryptodomex>=3.9.0,<4.0.0"
+    
+    # Install SNMP libraries
+    echo "Installing SNMP libraries..."
+    sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/pip install --force-reinstall "pysnmp>=4.4.12,<6.0.0"
+    
+    # Install other dependencies
+    echo "Installing remaining dependencies..."
+    if [ -f "requirements.txt" ]; then
+        sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/pip install --force-reinstall -r requirements.txt
+    else
+        # Install from known requirements
+        sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/pip install --force-reinstall "requests>=2.28.0,<3.0.0"
+        sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/pip install --force-reinstall "urllib3>=1.26.0,<3.0.0"
+        sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/pip install --force-reinstall "PyYAML>=6.0,<7.0.0"
+    fi
+    
+    # Test imports
+    echo "Testing imports..."
+    sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/python3 -c "
+try:
+    from pyasn1.compat.octets import str2octs
+    from pysnmp.entity import engine, config
+    from pysnmp.entity.rfc3413 import cmdrsp, context
+    from pysnmp.carrier.asyncore import dgram
+    import yaml
+    import requests
+    print('✓ All imports successful')
+except ImportError as e:
+    print(f'✗ Import error: {e}')
+    exit(1)
+"
+    
+    if [ $? -eq 0 ]; then
+        echo "✓ Dependencies fixed successfully"
+        echo ""
+        echo "You can now restart the service:"
+        echo "  sudo systemctl restart nutanix-snmp-daemon"
+        echo "  sudo systemctl status nutanix-snmp-daemon"
+    else
+        echo "✗ There are still import issues"
+        echo "You may need to recreate the virtual environment:"
+        echo "  sudo rm -rf $INSTALL_DIR/venv"
+        echo "  sudo $0"
+        exit 1
+    fi
+}
         "")
             install_daemon
             ;;
