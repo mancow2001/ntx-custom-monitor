@@ -1,0 +1,33 @@
+[Unit]
+Description=Nutanix SNMP Daemon
+Documentation=https://github.com/your-repo/nutanix-snmp-daemon
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=nutanix-snmp
+Group=nutanix-snmp
+WorkingDirectory=/opt/nutanix-snmp-daemon
+ExecStart=/usr/bin/python3 /opt/nutanix-snmp-daemon/nutanix_snmp_daemon.py
+ExecReload=/bin/kill -HUP $MAINPID
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30
+Restart=always
+RestartSec=10
+
+# Security settings
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/log /tmp
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+# Environment
+Environment=PYTHONPATH=/opt/nutanix-snmp-daemon
+Environment=CONFIG_FILE=/etc/nutanix_snmp_daemon.conf
+
+[Install]
+WantedBy=multi-user.target
