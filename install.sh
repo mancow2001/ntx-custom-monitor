@@ -293,12 +293,12 @@ setup_python_env() {
     sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/pip install --upgrade pip
     
     # Check if requirements.txt exists
-    if [ ! -f "requirements_v4.txt" ]; then
-        echo "Error: requirements_v4.txt not found in current directory"
+    if [ ! -f "requirements.txt" ]; then
+        echo "Error: requirements.txt not found in current directory"
         echo "Creating minimal requirements..."
         
         # Create minimal requirements for v4 SDK
-        cat > requirements_v4.txt << EOF
+        cat > requirements.txt << EOF
 # Nutanix SNMP Daemon Requirements (v4 SDK)
 PyYAML>=6.0,<7.0.0
 pysnmp>=6.0.0,<7.0.0
@@ -313,7 +313,7 @@ EOF
     fi
     
     # Install Python dependencies
-    echo "Installing Python dependencies from requirements_v4.txt..."
+    echo "Installing Python dependencies from requirements.txt..."
     
     # Install standard libraries first
     echo "Installing standard libraries..."
@@ -338,7 +338,7 @@ EOF
     
     # Install any remaining dependencies
     echo "Installing remaining dependencies..."
-    sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/pip install -r requirements_v4.txt
+    sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/pip install -r requirements.txt
     
     echo "✓ Python environment configured successfully with v4 SDK"
 }
@@ -349,9 +349,9 @@ install_daemon_files() {
     
     # Required Python files for v4 SDK version
     local required_files=(
-        "nutanix_snmp_daemon_v4.py"
+        "nutanix_snmp_daemon.py"
         "config_manager.py"
-        "nutanix_api_v4.py"
+        "nutanix_api.py"
         "metrics_collector.py"
         "snmp_agent.py"
     )
@@ -373,7 +373,7 @@ install_daemon_files() {
     done
     
     # Make main daemon executable
-    chmod +x $INSTALL_DIR/nutanix_snmp_daemon_v4.py
+    chmod +x $INSTALL_DIR/nutanix_snmp_daemon.py
     
     # Copy test script if it exists
     if [ -f "test_v4_daemon.py" ]; then
@@ -406,7 +406,7 @@ install_configuration() {
         else
             echo "Warning: No configuration file found. Creating default configuration..."
             # Create default configuration using the daemon itself
-            sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/python3 $INSTALL_DIR/nutanix_snmp_daemon_v4.py --create-config $CONFIG_FILE 2>/dev/null || {
+            sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/python3 $INSTALL_DIR/nutanix_snmp_daemon.py --create-config $CONFIG_FILE 2>/dev/null || {
                 echo "Error: Could not create default configuration"
                 exit 1
             }
@@ -562,9 +562,9 @@ fix_dependencies() {
     install_v4_sdk_packages
     
     # Install other dependencies if requirements file exists
-    if [ -f "requirements_v4.txt" ]; then
+    if [ -f "requirements.txt" ]; then
         echo "Installing remaining dependencies..."
-        sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/pip install -r requirements_v4.txt
+        sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/pip install -r requirements.txt
     fi
     
     # Test imports
