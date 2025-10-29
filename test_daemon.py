@@ -41,6 +41,18 @@ def test_config_loading(config_path=None):
                 print(f"✗ Missing required section: {section}")
                 return False, None
         
+        # Check for SDK configuration
+        if 'sdk' in config:
+            print("✓ SDK configuration section found")
+            sdk_config = config['sdk']
+            enabled_namespaces = []
+            for ns in ['clustermgmt', 'vmm', 'prism', 'networking', 'volumes', 'opsmgmt']:
+                if sdk_config.get(f'enable_{ns}', False):
+                    enabled_namespaces.append(ns)
+            print(f"✓ Enabled SDK namespaces: {enabled_namespaces}")
+        else:
+            print("⚠ SDK configuration section not found (using defaults)")
+        
         return True, config
         
     except Exception as e:
@@ -330,6 +342,27 @@ def create_sample_config():
             'max_concurrent_requests': 10,
             'cache_timeout': 30,
             'enable_metrics_cache': True
+        },
+        'sdk': {
+            'enable_clustermgmt': True,
+            'enable_vmm': True,
+            'enable_prism': True,
+            'enable_networking': False,
+            'enable_volumes': False,
+            'enable_opsmgmt': False,
+            'stats': {
+                'enabled': True,
+                'time_range_minutes': 5,
+                'stat_type': 'AVG',
+                'default_page_size': 1000
+            },
+            'rate_limiting': {
+                'enable_backoff': True,
+                'max_requests_per_minute': 300,
+                'retry_on_rate_limit': True,
+                'backoff_multiplier': 2,
+                'max_retry_delay': 60
+            }
         }
     }
     

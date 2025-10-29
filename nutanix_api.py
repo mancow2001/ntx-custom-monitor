@@ -10,36 +10,78 @@ import time
 from typing import Dict, List, Optional, Any, Union
 from datetime import datetime, timedelta
 
-# Nutanix modern SDK imports
-from ntnx_clustermgmt_py_client import Configuration as ClusterMgmtConfig
-from ntnx_clustermgmt_py_client import ApiClient as ClusterMgmtApiClient
-from ntnx_clustermgmt_py_client.api.clusters_api import ClustersApi
-from ntnx_clustermgmt_py_client.api.hosts_api import HostsApi
-from ntnx_clustermgmt_py_client.rest import ApiException as ClusterMgmtApiException
+logger = logging.getLogger(__name__)
 
-from ntnx_vmm_py_client import Configuration as VmmConfig
-from ntnx_vmm_py_client import ApiClient as VmmApiClient
-from ntnx_vmm_py_client.api.vm_api import VmApi
-from ntnx_vmm_py_client.rest import ApiException as VmmApiException
+# Nutanix modern SDK imports with error handling
+try:
+    from ntnx_clustermgmt_py_client import Configuration as ClusterMgmtConfig
+    from ntnx_clustermgmt_py_client import ApiClient as ClusterMgmtApiClient
+    from ntnx_clustermgmt_py_client.api.clusters_api import ClustersApi
+    from ntnx_clustermgmt_py_client.rest import ApiException as ClusterMgmtApiException
+    CLUSTERMGMT_AVAILABLE = True
+    logger.debug("Cluster Management SDK imported successfully")
+except ImportError as e:
+    logger.warning(f"Cluster Management SDK not available: {e}")
+    CLUSTERMGMT_AVAILABLE = False
+    ClusterMgmtConfig = None
+    ClusterMgmtApiClient = None
+    ClustersApi = None
+    ClusterMgmtApiException = Exception
 
-from ntnx_prism_py_client import Configuration as PrismConfig
-from ntnx_prism_py_client import ApiClient as PrismApiClient
-from ntnx_prism_py_client.rest import ApiException as PrismApiException
+# Try to import hosts API separately as it might not be available
+try:
+    from ntnx_clustermgmt_py_client.api.hosts_api import HostsApi
+    HOSTS_API_AVAILABLE = True
+    logger.debug("Hosts API imported successfully")
+except ImportError as e:
+    logger.warning(f"Hosts API not available: {e}")
+    HOSTS_API_AVAILABLE = False
+    HostsApi = None
 
-# Import the statistics models
+try:
+    from ntnx_vmm_py_client import Configuration as VmmConfig
+    from ntnx_vmm_py_client import ApiClient as VmmApiClient
+    from ntnx_vmm_py_client.api.vm_api import VmApi
+    from ntnx_vmm_py_client.rest import ApiException as VmmApiException
+    VMM_AVAILABLE = True
+    logger.debug("VMM SDK imported successfully")
+except ImportError as e:
+    logger.warning(f"VMM SDK not available: {e}")
+    VMM_AVAILABLE = False
+    VmmConfig = None
+    VmmApiClient = None
+    VmApi = None
+    VmmApiException = Exception
+
+try:
+    from ntnx_prism_py_client import Configuration as PrismConfig
+    from ntnx_prism_py_client import ApiClient as PrismApiClient
+    from ntnx_prism_py_client.rest import ApiException as PrismApiException
+    PRISM_AVAILABLE = True
+    logger.debug("Prism SDK imported successfully")
+except ImportError as e:
+    logger.warning(f"Prism SDK not available: {e}")
+    PRISM_AVAILABLE = False
+    PrismConfig = None
+    PrismApiClient = None
+    PrismApiException = Exception
+
+# Import the statistics models with error handling
 try:
     from ntnx_clustermgmt_py_client.models.common.v1.stats.down_sampling_operator import DownSamplingOperator
     from ntnx_clustermgmt_py_client.models.common.v1.stats.time_range_filter import TimeRangeFilter
+except ImportError as e:
+    logger.debug(f"Could not import cluster statistics models: {e}")
+    DownSamplingOperator = None
+    TimeRangeFilter = None
+
+try:
     from ntnx_vmm_py_client.models.common.v1.stats.down_sampling_operator import DownSamplingOperator as VmmDownSamplingOperator
     from ntnx_vmm_py_client.models.common.v1.stats.time_range_filter import TimeRangeFilter as VmmTimeRangeFilter
 except ImportError as e:
-    logging.warning(f"Could not import statistics models: {e}")
-    DownSamplingOperator = None
-    TimeRangeFilter = None
+    logger.debug(f"Could not import VMM statistics models: {e}")
     VmmDownSamplingOperator = None
     VmmTimeRangeFilter = None
-
-logger = logging.getLogger(__name__)
 
 class NutanixAPIError(Exception):
     """Custom exception for Nutanix API errors"""
@@ -57,10 +99,26 @@ class NutanixAPIClient:
         self.ssl_verify = config.get('ssl_verify', False)
         self.timeout = config.get('timeout', 30)
         
+        # Get SDK configuration
+        self.sdk_config = config.get('sdk_config', {})
+        
         # Connection health tracking
         self.last_successful_request = None
         self.consecutive_failures = 0
         self.max_failures = config.get('retry_count', 3)
+        
+        # Check which SDKs are available vs enabled
+        self.available_sdks = {
+            'clustermgmt': CLUSTERMGMT_AVAILABLE and self.sdk_config.get('enable_clustermgmt', True),
+            'hosts_api': HOSTS_API_AVAILABLE and self.sdk_config.get('enable_clustermgmt', True),
+            'vmm': VMM_AVAILABLE and self.sdk_config.get('enable_vmm', True),
+            'prism': PRISM_AVAILABLE and self.sdk_config.get('enable_prism', True)
+        }
+        
+        logger.info(f"SDK availability: {self.available_sdks}")
+        
+        if not any(self.available_sdks.values()):
+            raise NutanixAPIError("No Nutanix SDK modules are available or enabled")
         
         # Initialize SDK configurations
         self._setup_sdk_configs()
@@ -85,36 +143,60 @@ class NutanixAPIClient:
         }
         
         # Cluster Management configuration
-        self.clustermgmt_config = ClusterMgmtConfig()
-        for key, value in base_config.items():
-            setattr(self.clustermgmt_config, key, value)
+        if CLUSTERMGMT_AVAILABLE:
+            self.clustermgmt_config = ClusterMgmtConfig()
+            for key, value in base_config.items():
+                if hasattr(self.clustermgmt_config, key):
+                    setattr(self.clustermgmt_config, key, value)
         
         # VMM configuration
-        self.vmm_config = VmmConfig()
-        for key, value in base_config.items():
-            setattr(self.vmm_config, key, value)
+        if VMM_AVAILABLE:
+            self.vmm_config = VmmConfig()
+            for key, value in base_config.items():
+                if hasattr(self.vmm_config, key):
+                    setattr(self.vmm_config, key, value)
         
         # Prism configuration
-        self.prism_config = PrismConfig()
-        for key, value in base_config.items():
-            setattr(self.prism_config, key, value)
+        if PRISM_AVAILABLE:
+            self.prism_config = PrismConfig()
+            for key, value in base_config.items():
+                if hasattr(self.prism_config, key):
+                    setattr(self.prism_config, key, value)
     
     def _setup_api_clients(self):
         """Setup API clients for all namespaces"""
         try:
             # Cluster Management API client
-            self.clustermgmt_client = ClusterMgmtApiClient(configuration=self.clustermgmt_config)
-            self.clusters_api = ClustersApi(api_client=self.clustermgmt_client)
-            self.hosts_api = HostsApi(api_client=self.clustermgmt_client)
+            if CLUSTERMGMT_AVAILABLE:
+                self.clustermgmt_client = ClusterMgmtApiClient(configuration=self.clustermgmt_config)
+                self.clusters_api = ClustersApi(api_client=self.clustermgmt_client)
+                
+                # Only setup hosts API if available
+                if HOSTS_API_AVAILABLE:
+                    self.hosts_api = HostsApi(api_client=self.clustermgmt_client)
+                else:
+                    self.hosts_api = None
+                    logger.warning("Hosts API not available, host metrics will be disabled")
+            else:
+                self.clustermgmt_client = None
+                self.clusters_api = None
+                self.hosts_api = None
             
             # VMM API client
-            self.vmm_client = VmmApiClient(configuration=self.vmm_config)
-            self.vm_api = VmApi(api_client=self.vmm_client)
+            if VMM_AVAILABLE:
+                self.vmm_client = VmmApiClient(configuration=self.vmm_config)
+                self.vm_api = VmApi(api_client=self.vmm_client)
+            else:
+                self.vmm_client = None
+                self.vm_api = None
             
             # Prism API client
-            self.prism_client = PrismApiClient(configuration=self.prism_config)
+            if PRISM_AVAILABLE:
+                self.prism_client = PrismApiClient(configuration=self.prism_config)
+            else:
+                self.prism_client = None
             
-            logger.info("All modern SDK API clients initialized successfully")
+            logger.info("Modern SDK API clients initialized successfully")
             
         except Exception as e:
             logger.error(f"Failed to initialize SDK API clients: {e}")
@@ -176,6 +258,10 @@ class NutanixAPIClient:
     
     def get_clusters(self) -> List[Dict]:
         """Get list of all clusters"""
+        if not CLUSTERMGMT_AVAILABLE or not self.clusters_api:
+            logger.warning("Cluster Management API not available")
+            return []
+        
         try:
             logger.debug("Fetching clusters using modern SDK")
             
@@ -213,6 +299,10 @@ class NutanixAPIClient:
     
     def get_hosts(self) -> List[Dict]:
         """Get list of all hosts"""
+        if not HOSTS_API_AVAILABLE or not self.hosts_api:
+            logger.warning("Hosts API not available")
+            return []
+        
         try:
             logger.debug("Fetching hosts using modern SDK")
             
@@ -250,6 +340,10 @@ class NutanixAPIClient:
     
     def get_vms(self) -> List[Dict]:
         """Get list of all VMs"""
+        if not VMM_AVAILABLE or not self.vm_api:
+            logger.warning("VMM API not available")
+            return []
+        
         try:
             logger.debug("Fetching VMs using modern SDK")
             
@@ -287,6 +381,10 @@ class NutanixAPIClient:
     
     def get_cluster_stats(self, cluster_uuid: str) -> Optional[Dict]:
         """Get performance statistics for a specific cluster"""
+        if not CLUSTERMGMT_AVAILABLE or not self.clusters_api:
+            logger.debug("Cluster Management API not available for stats")
+            return None
+        
         try:
             logger.debug(f"Fetching cluster stats for {cluster_uuid} using modern SDK")
             
@@ -304,7 +402,11 @@ class NutanixAPIClient:
             
             try:
                 # Try to get cluster statistics
-                response = self.clusters_api.get_cluster_stats_by_id(**kwargs)
+                if hasattr(self.clusters_api, 'get_cluster_stats_by_id'):
+                    response = self.clusters_api.get_cluster_stats_by_id(**kwargs)
+                else:
+                    logger.debug("Cluster stats method not available")
+                    return None
                 
                 if hasattr(response, 'data') and response.data:
                     stats_data = response.data
@@ -351,6 +453,10 @@ class NutanixAPIClient:
     
     def get_host_stats(self, host_uuid: str) -> Optional[Dict]:
         """Get performance statistics for a specific host"""
+        if not HOSTS_API_AVAILABLE or not self.hosts_api:
+            logger.debug("Hosts API not available for stats")
+            return None
+        
         try:
             logger.debug(f"Fetching host stats for {host_uuid} using modern SDK")
             
@@ -368,7 +474,11 @@ class NutanixAPIClient:
             
             try:
                 # Try to get host statistics
-                response = self.hosts_api.get_host_stats_by_id(**kwargs)
+                if hasattr(self.hosts_api, 'get_host_stats_by_id'):
+                    response = self.hosts_api.get_host_stats_by_id(**kwargs)
+                else:
+                    logger.debug("Host stats method not available")
+                    return None
                 
                 if hasattr(response, 'data') and response.data:
                     stats_data = response.data
@@ -412,6 +522,10 @@ class NutanixAPIClient:
     
     def get_vm_stats(self, vm_uuid: str) -> Optional[Dict]:
         """Get performance statistics for a specific VM"""
+        if not VMM_AVAILABLE or not self.vm_api:
+            logger.debug("VMM API not available for stats")
+            return None
+        
         try:
             logger.debug(f"Fetching VM stats for {vm_uuid} using modern SDK")
             
@@ -429,7 +543,11 @@ class NutanixAPIClient:
             
             try:
                 # Try to get VM statistics
-                response = self.vm_api.get_vm_stats_by_id(**kwargs)
+                if hasattr(self.vm_api, 'get_vm_stats_by_id'):
+                    response = self.vm_api.get_vm_stats_by_id(**kwargs)
+                else:
+                    logger.debug("VM stats method not available")
+                    return None
                 
                 if hasattr(response, 'data') and response.data:
                     stats_data = response.data
@@ -461,6 +579,10 @@ class NutanixAPIClient:
         except Exception as e:
             logger.error(f"Error getting VM stats for {vm_uuid}: {e}")
             return None
+    
+    def get_available_apis(self) -> Dict[str, bool]:
+        """Get information about which APIs are available"""
+        return self.available_sdks.copy()
     
     def close(self):
         """Close the API clients and cleanup"""

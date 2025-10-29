@@ -237,9 +237,31 @@ class ConfigManager:
                 'ca_file': '',
                 'allowed_snmp_clients': []
             },
+            'sdk': {
+                'enable_clustermgmt': True,
+                'enable_vmm': True,
+                'enable_prism': True,
+                'enable_networking': False,
+                'enable_volumes': False,
+                'enable_opsmgmt': False,
+                'stats': {
+                    'enabled': True,
+                    'time_range_minutes': 5,
+                    'stat_type': 'AVG',
+                    'default_page_size': 1000
+                },
+                'rate_limiting': {
+                    'enable_backoff': True,
+                    'max_requests_per_minute': 300,
+                    'retry_on_rate_limit': True,
+                    'backoff_multiplier': 2,
+                    'max_retry_delay': 60
+                }
+            },
             'debug': {
                 'enable_api_logging': False,
                 'enable_snmp_debugging': False,
+                'enable_sdk_debug': False,
                 'dump_raw_metrics': False,
                 'test_mode': False
             }

@@ -85,9 +85,35 @@ security:
   allowed_snmp_clients: []  # Empty means all clients allowed
   # Example: ["192.168.1.0/24", "10.0.0.0/8"]
 
+# SDK Configuration
+sdk:
+  # Enable/disable specific SDK namespaces
+  enable_clustermgmt: true
+  enable_vmm: true
+  enable_prism: true
+  enable_networking: false  # Optional SDK package
+  enable_volumes: false     # Optional SDK package
+  enable_opsmgmt: false     # Optional SDK package
+  
+  # Statistics collection settings
+  stats:
+    enabled: true
+    time_range_minutes: 5      # Time range for statistics queries
+    stat_type: "AVG"          # AVG, MAX, MIN, SUM
+    default_page_size: 1000   # Default page size for API calls
+    
+  # Rate limiting and performance
+  rate_limiting:
+    enable_backoff: true
+    max_requests_per_minute: 300
+    retry_on_rate_limit: true
+    backoff_multiplier: 2
+    max_retry_delay: 60
+
 # Debugging and Development
 debug:
   enable_api_logging: false
   enable_snmp_debugging: false
+  enable_sdk_debug: false
   dump_raw_metrics: false
   test_mode: false

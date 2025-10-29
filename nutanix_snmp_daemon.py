@@ -225,31 +225,42 @@ class NutanixSNMPDaemon:
     
     def _validate_sdk_config(self):
         """Validate SDK specific configuration"""
-        # Check which namespaces are available
-        enabled_namespaces = ['clustermgmt', 'vmm', 'prism']
+        sdk_config = self.config.get('sdk', {})
         
-        # Check for optional namespaces
-        try:
-            import ntnx_networking_py_client
+        # Check which namespaces are enabled in config
+        enabled_namespaces = []
+        if sdk_config.get('enable_clustermgmt', True):
+            enabled_namespaces.append('clustermgmt')
+        if sdk_config.get('enable_vmm', True):
+            enabled_namespaces.append('vmm')
+        if sdk_config.get('enable_prism', True):
+            enabled_namespaces.append('prism')
+        if sdk_config.get('enable_networking', False):
             enabled_namespaces.append('networking')
-        except ImportError:
-            pass
-        
-        try:
-            import ntnx_volumes_py_client
+        if sdk_config.get('enable_volumes', False):
             enabled_namespaces.append('volumes')
-        except ImportError:
-            pass
+        if sdk_config.get('enable_opsmgmt', False):
+            enabled_namespaces.append('opsmgmt')
         
         self.sdk_info['namespaces_used'] = enabled_namespaces
-        logger.info(f"Available SDK namespaces: {enabled_namespaces}")
+        logger.info(f"Configured SDK namespaces: {enabled_namespaces}")
         
-        # Check metrics configuration
-        metrics_config = self.config.get('metrics', {})
-        if metrics_config:
-            logger.info("Metrics collection configuration validated")
+        # Check which are actually available (will be reported by API client)
+        
+        # Check statistics configuration
+        stats_config = sdk_config.get('stats', {})
+        if stats_config.get('enabled', True):
+            logger.info("Statistics collection enabled")
+            logger.info(f"  Time range: {stats_config.get('time_range_minutes', 5)}min range, "
+                       f"type: {stats_config.get('stat_type', 'AVG')}")
         else:
-            logger.warning("No metrics configuration found")
+            logger.warning("Statistics collection disabled in SDK configuration")
+        
+        # Check rate limiting configuration
+        rate_config = sdk_config.get('rate_limiting', {})
+        if rate_config.get('enable_backoff', True):
+            logger.info("Rate limiting backoff enabled")
+            logger.info(f"  Max requests per minute: {rate_config.get('max_requests_per_minute', 300)}")
     
     def _initialize_components(self):
         """Initialize all daemon components"""
@@ -259,8 +270,17 @@ class NutanixSNMPDaemon:
             
             # Initialize API client with SDK
             nutanix_config = self.config.get('nutanix', {})
+            # Pass SDK config to API client
+            nutanix_config['sdk_config'] = self.config.get('sdk', {})
             self.api_client = NutanixAPIClient(nutanix_config)
             logger.info("Nutanix SDK API client initialized")
+            
+            # Log which APIs are actually available
+            available_apis = self.api_client.get_available_apis()
+            logger.info(f"Available APIs: {[k for k, v in available_apis.items() if v]}")
+            unavailable_apis = [k for k, v in available_apis.items() if not v]
+            if unavailable_apis:
+                logger.warning(f"Unavailable APIs: {unavailable_apis}")
             
             # Initialize metrics collector
             self.collector = MetricsCollector(self.api_client, self.config)
