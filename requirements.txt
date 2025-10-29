@@ -1,4 +1,4 @@
-# Nutanix SNMP Daemon Requirements (Updated for v4 SDK)
+# Nutanix SNMP Daemon Requirements (Updated for Modern SDK)
 
 # Core dependencies
 PyYAML>=6.0,<7.0.0
@@ -9,7 +9,7 @@ pyasn1>=0.4.6,<1.0.0
 pyasn1-modules>=0.2.6,<1.0.0
 pycryptodomex>=3.15.0,<4.0.0
 
-# Nutanix v4 SDK packages
+# Nutanix Modern SDK packages
 ntnx-clustermgmt-py-client>=4.0.1,<5.0.0
 ntnx-vmm-py-client>=4.0.1,<5.0.0
 ntnx-prism-py-client>=4.0.1,<5.0.0

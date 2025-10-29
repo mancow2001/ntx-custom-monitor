@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-SNMP Agent Module (Enhanced for v4 SDK)
+SNMP Agent Module (Enhanced for Modern SDK)
 
 Implements SNMPv3 agent that exposes Nutanix performance data.
 Uses modern pysnmp 6.x API compatible with Python 3.10+
-Enhanced for v4 SDK with better error handling and performance.
+Enhanced for modern SDK with better error handling and performance.
 """
 
 import logging
@@ -130,7 +130,6 @@ class SNMPAgent:
         self.config = config
         self.snmp_config = config.get('snmp', {})
         self.security_config = config.get('security', {})
-        self.v4_sdk_config = config.get('v4_sdk', {})
         
         # SNMP configuration
         self.bind_ip = self.snmp_config.get('bind_ip', '0.0.0.0')
@@ -168,10 +167,10 @@ class SNMPAgent:
         self.total_requests = 0
         self.error_count = 0
         
-        # v4 SDK enhancements
+        # SDK enhancements
         self.sdk_metadata = {}
         
-        logger.info(f"SNMP agent initialized for {self.bind_ip}:{self.bind_port} (v4 SDK enhanced)")
+        logger.info(f"SNMP agent initialized for {self.bind_ip}:{self.bind_port}")
     
     def _get_auth_protocol(self):
         """Get authentication protocol"""
@@ -240,7 +239,7 @@ class SNMPAgent:
         self.vm_base = f"{self.base_oid}.3.1"
         self.system_base = f"{self.base_oid}.99.1"  # System/SDK info
         
-        # Metric definitions - Enhanced for v4 SDK
+        # Metric definitions - Enhanced for modern SDK
         self.cluster_metrics = {
             1: 'cpu_usage_percent',
             2: 'memory_usage_percent',
@@ -506,7 +505,7 @@ class SNMPAgent:
             metadata = self.performance_data.get('metadata', {})
             
             if metric_name == 'sdk_version':
-                return 'v4.0'
+                return 'modern'
             elif metric_name == 'api_healthy':
                 return 1 if metadata.get('api_healthy', False) else 0
             elif metric_name == 'collection_time':
@@ -541,7 +540,7 @@ class SNMPAgent:
                 'cache_enabled': metadata.get('cache_enabled', False)
             }
         
-        logger.debug("Performance data updated in SNMP agent (v4 SDK)")
+        logger.debug("Performance data updated in SNMP agent")
     
     def start(self):
         """Start the SNMP agent using asyncio"""
@@ -549,7 +548,7 @@ class SNMPAgent:
             logger.warning("SNMP agent is already running")
             return
         
-        logger.info("Starting SNMP agent (v4 SDK enhanced)...")
+        logger.info("Starting SNMP agent...")
         self.start_time = datetime.now()
         
         try:
@@ -621,7 +620,7 @@ class SNMPAgent:
                 'last_data_update': self.last_data_update.isoformat() if self.last_data_update else 'Never',
                 'uptime_seconds': uptime,
                 'error_count': self.error_count,
-                'version': 'v4-SDK-Enhanced'
+                'version': 'modern-SDK-Enhanced'
             }
             
             # Add controller stats if available

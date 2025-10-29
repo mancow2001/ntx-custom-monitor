@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Nutanix SNMP Daemon Installation Script (v4 SDK Version)
+# Nutanix SNMP Daemon Installation Script (Modern SDK Version)
 
 set -e
 
@@ -16,12 +16,12 @@ LOGROTATE_FILE="/etc/logrotate.d/nutanix-snmp-daemon"
 
 # Script info
 SCRIPT_NAME=$(basename "$0")
-VERSION="2.0.0-v4SDK"
+VERSION="2.0.0-modern-SDK"
 
 # Function to display help
 show_help() {
     cat << EOF
-Nutanix SNMP Daemon Installer v$VERSION (v4 SDK)
+Nutanix SNMP Daemon Installer v$VERSION (Modern SDK)
 
 Usage: $SCRIPT_NAME [OPTIONS]
 
@@ -32,24 +32,24 @@ OPTIONS:
     --keep-data            Keep data and log files during uninstall
     --keep-all             Keep both configuration and data during uninstall
     --fix-dependencies     Fix Python dependency issues
-    --install-v4-sdk       Install/upgrade v4 SDK packages only
+    --install-sdk          Install/upgrade modern SDK packages only
     -v, --version          Show version information
 
 EXAMPLES:
-    $SCRIPT_NAME                    # Install the daemon with v4 SDK
+    $SCRIPT_NAME                    # Install the daemon with modern SDK
     $SCRIPT_NAME -u                 # Uninstall completely
     $SCRIPT_NAME -u --keep-config   # Uninstall but keep configuration
     $SCRIPT_NAME -u --keep-all      # Uninstall but keep config and data
     $SCRIPT_NAME --fix-dependencies # Fix Python import issues
-    $SCRIPT_NAME --install-v4-sdk   # Install/upgrade only v4 SDK packages
+    $SCRIPT_NAME --install-sdk      # Install/upgrade only modern SDK packages
 
 EOF
 }
 
 # Function to display version
 show_version() {
-    echo "Nutanix SNMP Daemon Installer v$VERSION (v4 SDK)"
-    echo "Uses official Nutanix v4 Python SDK packages"
+    echo "Nutanix SNMP Daemon Installer v$VERSION (Modern SDK)"
+    echo "Uses official Nutanix modern Python SDK packages"
 }
 
 # Function to check if running as root
@@ -116,7 +116,7 @@ uninstall_daemon() {
         esac
     done
     
-    echo "Uninstalling Nutanix SNMP Daemon (v4 SDK)..."
+    echo "Uninstalling Nutanix SNMP Daemon (Modern SDK)..."
     echo "Keep config: $keep_config"
     echo "Keep data: $keep_data"
     echo ""
@@ -168,7 +168,7 @@ uninstall_daemon() {
     remove_user
     
     echo ""
-    echo "✓ Nutanix SNMP Daemon (v4 SDK) uninstalled successfully!"
+    echo "✓ Nutanix SNMP Daemon (Modern SDK) uninstalled successfully!"
     
     if [ "$keep_config" = true ] || [ "$keep_data" = true ]; then
         echo ""
@@ -234,9 +234,9 @@ create_directories() {
     echo "✓ Directories created and configured"
 }
 
-# Function to install v4 SDK packages only
-install_v4_sdk_packages() {
-    echo "Installing/upgrading Nutanix v4 SDK packages..."
+# Function to install modern SDK packages only
+install_modern_sdk_packages() {
+    echo "Installing/upgrading Nutanix modern SDK packages..."
     
     # Check if virtual environment exists
     if [ ! -d "$INSTALL_DIR/venv" ]; then
@@ -248,20 +248,20 @@ install_v4_sdk_packages() {
     # Upgrade pip first
     sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/pip install --upgrade pip
     
-    # Install v4 SDK packages with specific order
-    echo "Installing Core v4 SDK packages..."
+    # Install modern SDK packages with specific order
+    echo "Installing Core modern SDK packages..."
     sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/pip install --upgrade "ntnx-clustermgmt-py-client>=4.0.1,<5.0.0"
     sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/pip install --upgrade "ntnx-vmm-py-client>=4.0.1,<5.0.0"
     sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/pip install --upgrade "ntnx-prism-py-client>=4.0.1,<5.0.0"
     
-    echo "Installing Optional v4 SDK packages..."
+    echo "Installing Optional modern SDK packages..."
     # These might fail if not available, so we use || true
     sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/pip install --upgrade "ntnx-networking-py-client>=4.0.1,<5.0.0" || echo "⚠ Networking SDK not available"
     sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/pip install --upgrade "ntnx-volumes-py-client>=4.0.1,<5.0.0" || echo "⚠ Volumes SDK not available"
     sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/pip install --upgrade "ntnx-opsmgmt-py-client>=4.0.1,<5.0.0" || echo "⚠ OpsMgmt SDK not available"
     
     # Test critical imports
-    echo "Testing v4 SDK imports..."
+    echo "Testing modern SDK imports..."
     sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/python3 -c "
 try:
     from ntnx_clustermgmt_py_client import Configuration, ApiClient
@@ -269,17 +269,17 @@ try:
     from ntnx_vmm_py_client import Configuration as VmmConfig
     from ntnx_vmm_py_client.api.vm_api import VmApi
     from ntnx_prism_py_client import Configuration as PrismConfig
-    print('✓ All critical v4 SDK imports successful')
+    print('✓ All critical modern SDK imports successful')
 except ImportError as e:
-    print(f'✗ v4 SDK import error: {e}')
+    print(f'✗ Modern SDK import error: {e}')
     exit(1)
 " || {
-        echo "Error: Failed to import v4 SDK modules"
+        echo "Error: Failed to import modern SDK modules"
         echo "Please check the error messages above"
         exit 1
     }
     
-    echo "✓ v4 SDK packages installed and tested successfully"
+    echo "✓ Modern SDK packages installed and tested successfully"
 }
 
 # Function to setup Python environment
@@ -297,9 +297,9 @@ setup_python_env() {
         echo "Error: requirements.txt not found in current directory"
         echo "Creating minimal requirements..."
         
-        # Create minimal requirements for v4 SDK
+        # Create minimal requirements for modern SDK
         cat > requirements.txt << EOF
-# Nutanix SNMP Daemon Requirements (v4 SDK)
+# Nutanix SNMP Daemon Requirements (Modern SDK)
 PyYAML>=6.0,<7.0.0
 pysnmp>=6.0.0,<7.0.0
 pyasn1>=0.4.6,<1.0.0
@@ -333,21 +333,21 @@ EOF
     echo "Installing SNMP libraries..."
     sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/pip install "pysnmp>=6.0.0,<7.0.0"
     
-    # Install v4 SDK packages
-    install_v4_sdk_packages
+    # Install modern SDK packages
+    install_modern_sdk_packages
     
     # Install any remaining dependencies
     echo "Installing remaining dependencies..."
     sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/pip install -r requirements.txt
     
-    echo "✓ Python environment configured successfully with v4 SDK"
+    echo "✓ Python environment configured successfully with modern SDK"
 }
 
 # Function to install daemon files
 install_daemon_files() {
-    echo "Installing daemon files (v4 SDK version)..."
+    echo "Installing daemon files (Modern SDK version)..."
     
-    # Required Python files for v4 SDK version
+    # Required Python files for modern SDK version
     local required_files=(
         "nutanix_snmp_daemon.py"
         "config_manager.py"
@@ -360,7 +360,7 @@ install_daemon_files() {
     for file in "${required_files[@]}"; do
         if [ ! -f "$file" ]; then
             echo "Error: Required file '$file' not found in current directory"
-            echo "Please make sure you have the v4 SDK version of the files"
+            echo "Please make sure you have the modern SDK version of the files"
             exit 1
         fi
     done
@@ -383,7 +383,7 @@ install_daemon_files() {
         echo "✓ Installed test_daemon.py"
     fi
     
-    echo "✓ Daemon files installed (v4 SDK version)"
+    echo "✓ Daemon files installed (Modern SDK version)"
 }
 
 # Function to install configuration
@@ -397,12 +397,12 @@ install_configuration() {
             chown root:$DAEMON_GROUP $CONFIG_FILE
             echo "✓ Configuration file installed at $CONFIG_FILE"
             echo "⚠  Please edit this file with your Nutanix and SNMP settings before starting the service."
-        elif [ -f "config.yaml" ]; then
-            cp config.yaml $CONFIG_FILE
+        elif [ -f "config.example.yaml" ]; then
+            cp config.example.yaml $CONFIG_FILE
             chmod 640 $CONFIG_FILE
             chown root:$DAEMON_GROUP $CONFIG_FILE
             echo "✓ Configuration file installed at $CONFIG_FILE"
-            echo "⚠  Please edit this file with your settings and consider adding v4 SDK specific options."
+            echo "⚠  Please edit this file with your settings and consider adding modern SDK specific options."
         else
             echo "Warning: No configuration file found. Creating default configuration..."
             # Create default configuration using the daemon itself
@@ -425,7 +425,7 @@ create_systemd_service() {
     
     cat > $SERVICE_FILE << EOF
 [Unit]
-Description=Nutanix SNMP Daemon (v4 SDK)
+Description=Nutanix SNMP Daemon (Modern SDK)
 Documentation=https://github.com/your-repo/nutanix-snmp-daemon
 After=network.target
 Wants=network.target
@@ -491,7 +491,7 @@ EOF
 
 # Function to install the daemon
 install_daemon() {
-    echo "Installing Nutanix SNMP Daemon (v4 SDK Version) v$VERSION..."
+    echo "Installing Nutanix SNMP Daemon (Modern SDK Version) v$VERSION..."
     echo ""
     
     check_root
@@ -524,9 +524,9 @@ install_daemon() {
     echo "- Register your own enterprise OID and update the base_oid setting"
     echo "- Configure your monitoring tool to use the SNMP v3 credentials"
     echo "- Ensure firewall allows SNMP traffic on the configured port (default: 161)"
-    echo "- Verify your Prism Central supports v4 APIs (PC 2024.1+ recommended)"
+    echo "- Verify your Prism Central supports modern APIs (PC 2022.6+ recommended)"
     echo ""
-    echo "v4 SDK Features:"
+    echo "Modern SDK Features:"
     echo "- Uses official Nutanix Python SDK packages"
     echo "- Improved error handling and retry mechanisms"
     echo "- Better performance and connection management"
@@ -537,7 +537,7 @@ install_daemon() {
 
 # Function to fix dependencies
 fix_dependencies() {
-    echo "Fixing Python dependencies (v4 SDK)..."
+    echo "Fixing Python dependencies (Modern SDK)..."
     
     check_root
     
@@ -559,7 +559,7 @@ fix_dependencies() {
     sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/pip install --upgrade pip
     
     # Install dependencies in specific order
-    install_v4_sdk_packages
+    install_modern_sdk_packages
     
     # Install other dependencies if requirements file exists
     if [ -f "requirements.txt" ]; then
@@ -615,9 +615,9 @@ main() {
             fix_dependencies
             exit 0
             ;;
-        --install-v4-sdk)
+        --install-sdk)
             check_root
-            install_v4_sdk_packages
+            install_modern_sdk_packages
             exit 0
             ;;
         "")

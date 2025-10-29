@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Nutanix API Client Module (v4 SDK)
+Nutanix API Client Module (Modern SDK)
 
-Handles communication with Nutanix Prism Central using the official v4 SDK.
+Handles communication with Nutanix Prism Central using the official modern SDK.
 """
 
 import logging
@@ -10,7 +10,7 @@ import time
 from typing import Dict, List, Optional, Any, Union
 from datetime import datetime, timedelta
 
-# Nutanix v4 SDK imports
+# Nutanix modern SDK imports
 from ntnx_clustermgmt_py_client import Configuration as ClusterMgmtConfig
 from ntnx_clustermgmt_py_client import ApiClient as ClusterMgmtApiClient
 from ntnx_clustermgmt_py_client.api.clusters_api import ClustersApi
@@ -46,7 +46,7 @@ class NutanixAPIError(Exception):
     pass
 
 class NutanixAPIClient:
-    """Handles communication with Nutanix Prism Central using v4 SDK"""
+    """Handles communication with Nutanix Prism Central using modern SDK"""
     
     def __init__(self, config: Dict[str, Any]):
         self.config = config
@@ -68,7 +68,7 @@ class NutanixAPIClient:
         # Initialize API clients
         self._setup_api_clients()
         
-        logger.info(f"Nutanix v4 SDK client initialized for {self.prism_central_ip}:{self.port}")
+        logger.info(f"Nutanix modern SDK client initialized for {self.prism_central_ip}:{self.port}")
     
     def _setup_sdk_configs(self):
         """Setup SDK configurations for all namespaces"""
@@ -114,7 +114,7 @@ class NutanixAPIClient:
             # Prism API client
             self.prism_client = PrismApiClient(configuration=self.prism_config)
             
-            logger.info("All v4 SDK API clients initialized successfully")
+            logger.info("All modern SDK API clients initialized successfully")
             
         except Exception as e:
             logger.error(f"Failed to initialize SDK API clients: {e}")
@@ -177,7 +177,7 @@ class NutanixAPIClient:
     def get_clusters(self) -> List[Dict]:
         """Get list of all clusters"""
         try:
-            logger.debug("Fetching clusters using v4 SDK")
+            logger.debug("Fetching clusters using modern SDK")
             
             # Use the clusters API to list all clusters
             response = self.clusters_api.list_clusters(
@@ -204,7 +204,7 @@ class NutanixAPIClient:
                     clusters.append(cluster_dict)
             
             self._mark_success()
-            logger.info(f"Retrieved {len(clusters)} clusters using v4 SDK")
+            logger.info(f"Retrieved {len(clusters)} clusters using modern SDK")
             return clusters
             
         except (ClusterMgmtApiException, Exception) as e:
@@ -214,7 +214,7 @@ class NutanixAPIClient:
     def get_hosts(self) -> List[Dict]:
         """Get list of all hosts"""
         try:
-            logger.debug("Fetching hosts using v4 SDK")
+            logger.debug("Fetching hosts using modern SDK")
             
             # Use the hosts API to list all hosts
             response = self.hosts_api.list_hosts(
@@ -241,7 +241,7 @@ class NutanixAPIClient:
                     hosts.append(host_dict)
             
             self._mark_success()
-            logger.info(f"Retrieved {len(hosts)} hosts using v4 SDK")
+            logger.info(f"Retrieved {len(hosts)} hosts using modern SDK")
             return hosts
             
         except (ClusterMgmtApiException, Exception) as e:
@@ -251,7 +251,7 @@ class NutanixAPIClient:
     def get_vms(self) -> List[Dict]:
         """Get list of all VMs"""
         try:
-            logger.debug("Fetching VMs using v4 SDK")
+            logger.debug("Fetching VMs using modern SDK")
             
             # Use the VM API to list all VMs
             response = self.vm_api.list_vms(
@@ -278,7 +278,7 @@ class NutanixAPIClient:
                     vms.append(vm_dict)
             
             self._mark_success()
-            logger.info(f"Retrieved {len(vms)} VMs using v4 SDK")
+            logger.info(f"Retrieved {len(vms)} VMs using modern SDK")
             return vms
             
         except (VmmApiException, Exception) as e:
@@ -288,7 +288,7 @@ class NutanixAPIClient:
     def get_cluster_stats(self, cluster_uuid: str) -> Optional[Dict]:
         """Get performance statistics for a specific cluster"""
         try:
-            logger.debug(f"Fetching cluster stats for {cluster_uuid} using v4 SDK")
+            logger.debug(f"Fetching cluster stats for {cluster_uuid} using modern SDK")
             
             # Create time range for the last 5 minutes
             end_time = datetime.now()
@@ -312,7 +312,7 @@ class NutanixAPIClient:
                     # Convert to the expected format
                     stats = {}
                     
-                    # Map v4 SDK stats to our expected format
+                    # Map modern SDK stats to our expected format
                     if hasattr(stats_data, 'hypervisor_cpu_usage_ppm'):
                         stats['hypervisor_cpu_usage_ppm'] = getattr(stats_data, 'hypervisor_cpu_usage_ppm', 0)
                     
@@ -352,7 +352,7 @@ class NutanixAPIClient:
     def get_host_stats(self, host_uuid: str) -> Optional[Dict]:
         """Get performance statistics for a specific host"""
         try:
-            logger.debug(f"Fetching host stats for {host_uuid} using v4 SDK")
+            logger.debug(f"Fetching host stats for {host_uuid} using modern SDK")
             
             # Create time range for the last 5 minutes
             end_time = datetime.now()
@@ -376,7 +376,7 @@ class NutanixAPIClient:
                     # Convert to the expected format
                     stats = {}
                     
-                    # Map v4 SDK stats to our expected format
+                    # Map modern SDK stats to our expected format
                     if hasattr(stats_data, 'hypervisor_cpu_usage_ppm'):
                         stats['hypervisor_cpu_usage_ppm'] = getattr(stats_data, 'hypervisor_cpu_usage_ppm', 0)
                     
@@ -413,7 +413,7 @@ class NutanixAPIClient:
     def get_vm_stats(self, vm_uuid: str) -> Optional[Dict]:
         """Get performance statistics for a specific VM"""
         try:
-            logger.debug(f"Fetching VM stats for {vm_uuid} using v4 SDK")
+            logger.debug(f"Fetching VM stats for {vm_uuid} using modern SDK")
             
             # Create time range for the last 5 minutes
             end_time = datetime.now()
@@ -437,7 +437,7 @@ class NutanixAPIClient:
                     # Convert to the expected format
                     stats = {}
                     
-                    # Map v4 SDK stats to our expected format
+                    # Map modern SDK stats to our expected format
                     if hasattr(stats_data, 'hypervisor_cpu_usage_ppm'):
                         stats['hypervisor_cpu_usage_ppm'] = getattr(stats_data, 'hypervisor_cpu_usage_ppm', 0)
                     
@@ -467,7 +467,7 @@ class NutanixAPIClient:
         try:
             # Close all API clients
             if hasattr(self, 'clustermgmt_client'):
-                # Note: v4 SDK clients don't have explicit close methods
+                # Note: modern SDK clients don't have explicit close methods
                 # but we can clear references
                 self.clustermgmt_client = None
                 self.clusters_api = None
@@ -480,7 +480,7 @@ class NutanixAPIClient:
             if hasattr(self, 'prism_client'):
                 self.prism_client = None
             
-            logger.debug("Nutanix v4 SDK clients closed")
+            logger.debug("Nutanix modern SDK clients closed")
             
         except Exception as e:
             logger.error(f"Error closing API clients: {e}")

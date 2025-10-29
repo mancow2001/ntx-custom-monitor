@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Nutanix SNMP Daemon - Main Module (v4 SDK Version)
+Nutanix SNMP Daemon - Main Module
 
 This is the main daemon that orchestrates data collection and SNMP exposure
-using the official Nutanix v4 SDK.
+using the official Nutanix SDK.
 """
 
 import asyncio
@@ -17,7 +17,7 @@ from datetime import datetime
 from typing import Optional
 
 from config_manager import ConfigManager
-from nutanix_api_v4 import NutanixAPIClient, NutanixAPIError
+from nutanix_api import NutanixAPIClient, NutanixAPIError
 from metrics_collector import MetricsCollector
 from snmp_agent import SNMPAgent, SNMPAgentError
 
@@ -49,7 +49,7 @@ class HealthMonitor:
             'timestamp': datetime.now().isoformat(),
             'enabled': True,
             'components': {},
-            'v4_sdk_info': {}
+            'sdk_info': {}
         }
         
         # Check API client health
@@ -59,12 +59,12 @@ class HealthMonitor:
                 'healthy': api_healthy,
                 'consecutive_failures': getattr(api_client, 'consecutive_failures', 0),
                 'last_successful_request': getattr(api_client, 'last_successful_request', None),
-                'using_v4_sdk': True
+                'using_modern_sdk': True
             }
             
-            # Add v4 SDK specific info
+            # Add SDK specific info
             if api_client:
-                health['v4_sdk_info'] = {
+                health['sdk_info'] = {
                     'clustermgmt_client': hasattr(api_client, 'clustermgmt_client'),
                     'vmm_client': hasattr(api_client, 'vmm_client'),
                     'prism_client': hasattr(api_client, 'prism_client'),
@@ -122,7 +122,7 @@ class HealthMonitor:
         return health
 
 class NutanixSNMPDaemon:
-    """Main daemon class that orchestrates data collection and SNMP exposure using v4 SDK"""
+    """Main daemon class that orchestrates data collection and SNMP exposure using modern SDK"""
     
     def __init__(self, config_path: Optional[str] = None):
         # Load configuration
@@ -150,9 +150,9 @@ class NutanixSNMPDaemon:
         self.last_collection_time = None
         self.error_count = 0
         
-        # v4 SDK specific tracking
+        # SDK specific tracking
         self.sdk_info = {
-            'version': '4.x',
+            'version': 'modern',
             'namespaces_used': [],
             'last_sdk_error': None,
             'sdk_error_count': 0
@@ -163,7 +163,7 @@ class NutanixSNMPDaemon:
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGHUP, self._reload_config)
         
-        logger.info("Nutanix SNMP Daemon (v4 SDK) initialized")
+        logger.info("Nutanix SNMP Daemon initialized")
     
     def _setup_logging(self):
         """Setup logging configuration"""
@@ -203,7 +203,7 @@ class NutanixSNMPDaemon:
             logging.getLogger('ntnx_clustermgmt_py_client').setLevel(logging.DEBUG)
             logging.getLogger('ntnx_vmm_py_client').setLevel(logging.DEBUG)
             logging.getLogger('ntnx_prism_py_client').setLevel(logging.DEBUG)
-            logger.info("v4 SDK debug logging enabled")
+            logger.info("SDK debug logging enabled")
         
         logger.info(f"Logging configured: level={log_level}, file={log_file}")
     
@@ -223,44 +223,44 @@ class NutanixSNMPDaemon:
         except Exception as e:
             logger.error(f"Failed to reload configuration: {e}")
     
-    def _validate_v4_sdk_config(self):
-        """Validate v4 SDK specific configuration"""
-        v4_config = self.config.get('v4_sdk', {})
+    def _validate_sdk_config(self):
+        """Validate SDK specific configuration"""
+        # Check which namespaces are available
+        enabled_namespaces = ['clustermgmt', 'vmm', 'prism']
         
-        # Check which namespaces are enabled
-        enabled_namespaces = []
-        if v4_config.get('enable_clustermgmt', True):
-            enabled_namespaces.append('clustermgmt')
-        if v4_config.get('enable_vmm', True):
-            enabled_namespaces.append('vmm')
-        if v4_config.get('enable_prism', True):
-            enabled_namespaces.append('prism')
-        if v4_config.get('enable_networking', False):
+        # Check for optional namespaces
+        try:
+            import ntnx_networking_py_client
             enabled_namespaces.append('networking')
-        if v4_config.get('enable_volumes', False):
+        except ImportError:
+            pass
+        
+        try:
+            import ntnx_volumes_py_client
             enabled_namespaces.append('volumes')
+        except ImportError:
+            pass
         
         self.sdk_info['namespaces_used'] = enabled_namespaces
-        logger.info(f"v4 SDK enabled namespaces: {enabled_namespaces}")
+        logger.info(f"Available SDK namespaces: {enabled_namespaces}")
         
-        # Validate stats configuration
-        stats_config = v4_config.get('stats', {})
-        if stats_config.get('enabled', True):
-            logger.info(f"Statistics enabled: {stats_config.get('time_range_minutes', 5)}min range, "
-                       f"type: {stats_config.get('stat_type', 'AVG')}")
+        # Check metrics configuration
+        metrics_config = self.config.get('metrics', {})
+        if metrics_config:
+            logger.info("Metrics collection configuration validated")
         else:
-            logger.warning("Statistics collection disabled in v4 SDK configuration")
+            logger.warning("No metrics configuration found")
     
     def _initialize_components(self):
         """Initialize all daemon components"""
         try:
-            # Validate v4 SDK configuration
-            self._validate_v4_sdk_config()
+            # Validate SDK configuration
+            self._validate_sdk_config()
             
-            # Initialize API client with v4 SDK
+            # Initialize API client with SDK
             nutanix_config = self.config.get('nutanix', {})
             self.api_client = NutanixAPIClient(nutanix_config)
-            logger.info("Nutanix v4 SDK API client initialized")
+            logger.info("Nutanix SDK API client initialized")
             
             # Initialize metrics collector
             self.collector = MetricsCollector(self.api_client, self.config)
@@ -292,7 +292,7 @@ class NutanixSNMPDaemon:
                 start_time = time.time()
                 
                 # Collect performance statistics
-                logger.info("Starting metrics collection (v4 SDK)...")
+                logger.info("Starting metrics collection...")
                 
                 # Create new event loop for this thread
                 loop = asyncio.new_event_loop()
@@ -309,7 +309,7 @@ class NutanixSNMPDaemon:
                     self.last_collection_time = datetime.now()
                     
                     collection_time = time.time() - start_time
-                    logger.info(f"Metrics collection completed in {collection_time:.2f}s (v4 SDK)")
+                    logger.info(f"Metrics collection completed in {collection_time:.2f}s")
                     
                     # Log collection summary
                     cluster_count = len(stats.get('clusters', {}))
@@ -317,10 +317,10 @@ class NutanixSNMPDaemon:
                     vm_count = len(stats.get('vms', {}))
                     logger.info(f"Collected metrics: {cluster_count} clusters, {host_count} hosts, {vm_count} VMs")
                     
-                    # Log v4 SDK specific info
+                    # Log SDK specific info
                     metadata = stats.get('metadata', {})
                     if metadata.get('api_healthy', False):
-                        logger.debug("v4 SDK API health check passed during collection")
+                        logger.debug("SDK API health check passed during collection")
                     
                 finally:
                     loop.close()
@@ -334,7 +334,7 @@ class NutanixSNMPDaemon:
                 self.error_count += 1
                 self.sdk_info['last_sdk_error'] = str(e)
                 self.sdk_info['sdk_error_count'] += 1
-                logger.error(f"v4 SDK API error in collection worker: {e}")
+                logger.error(f"SDK API error in collection worker: {e}")
                 # Wait before retrying
                 time.sleep(min(30, collection_interval / 2))
             except Exception as e:
@@ -378,12 +378,12 @@ class NutanixSNMPDaemon:
                 else:
                     logger.debug("System health check passed")
                 
-                # Log v4 SDK specific health info
-                v4_info = health.get('v4_sdk_info', {})
-                if v4_info:
-                    logger.debug(f"v4 SDK health: clustermgmt={v4_info.get('clustermgmt_client', False)}, "
-                               f"vmm={v4_info.get('vmm_client', False)}, "
-                               f"prism={v4_info.get('prism_client', False)}")
+                # Log SDK specific health info
+                sdk_info = health.get('sdk_info', {})
+                if sdk_info:
+                    logger.debug(f"SDK health: clustermgmt={sdk_info.get('clustermgmt_client', False)}, "
+                               f"vmm={sdk_info.get('vmm_client', False)}, "
+                               f"prism={sdk_info.get('prism_client', False)}")
                 
                 # Sleep until next check
                 time.sleep(self.health_monitor.check_interval)
@@ -402,11 +402,11 @@ class NutanixSNMPDaemon:
                 error = status.get('error', 'Unknown error')
                 logger.error(f"Component {component} is unhealthy: {error}")
         
-        # Log v4 SDK specific issues
+        # Log SDK specific issues
         if self.sdk_info['sdk_error_count'] > 0:
-            logger.error(f"v4 SDK errors encountered: {self.sdk_info['sdk_error_count']}")
+            logger.error(f"SDK errors encountered: {self.sdk_info['sdk_error_count']}")
             if self.sdk_info['last_sdk_error']:
-                logger.error(f"Last v4 SDK error: {self.sdk_info['last_sdk_error']}")
+                logger.error(f"Last SDK error: {self.sdk_info['last_sdk_error']}")
         
         # Could implement additional alerting here (email, webhook, etc.)
     
@@ -416,7 +416,7 @@ class NutanixSNMPDaemon:
             logger.warning("Daemon is already running")
             return
         
-        logger.info("Starting Nutanix SNMP Daemon (v4 SDK)...")
+        logger.info("Starting Nutanix SNMP Daemon...")
         self.start_time = datetime.now()
         
         try:
@@ -425,11 +425,11 @@ class NutanixSNMPDaemon:
             
             # Test API connectivity
             if not self.api_client.health_check():
-                logger.error("Initial v4 SDK API health check failed")
+                logger.error("Initial SDK API health check failed")
                 if not self.config.get('debug', {}).get('test_mode', False):
-                    raise RuntimeError("Cannot start daemon - v4 SDK API connection failed")
+                    raise RuntimeError("Cannot start daemon - SDK API connection failed")
             else:
-                logger.info("v4 SDK API health check passed")
+                logger.info("SDK API health check passed")
             
             # Set running flag
             self.running = True
@@ -438,7 +438,7 @@ class NutanixSNMPDaemon:
             self.collection_thread = threading.Thread(
                 target=self._collection_worker,
                 daemon=True,
-                name="CollectionWorker-v4SDK"
+                name="CollectionWorker"
             )
             self.collection_thread.start()
             
@@ -456,7 +456,7 @@ class NutanixSNMPDaemon:
             )
             self.health_thread.start()
             
-            logger.info("Daemon started successfully with v4 SDK")
+            logger.info("Daemon started successfully")
             
             # Keep main thread alive
             try:
@@ -491,7 +491,7 @@ class NutanixSNMPDaemon:
             try:
                 self.api_client.close()
             except Exception as e:
-                logger.error(f"Error closing v4 SDK API client: {e}")
+                logger.error(f"Error closing SDK API client: {e}")
         
         # Wait for threads to finish
         for thread in [self.collection_thread, self.snmp_thread, self.health_thread]:
@@ -513,14 +513,14 @@ class NutanixSNMPDaemon:
             'collection_count': self.collection_count,
             'last_collection': self.last_collection_time.isoformat() if self.last_collection_time else None,
             'error_count': self.error_count,
-            'version': 'v4-SDK',
+            'version': 'modern-SDK',
             'components': {
                 'api_client': bool(self.api_client),
                 'collector': bool(self.collector),
                 'snmp_agent': bool(self.snmp_agent),
                 'health_monitor': bool(self.health_monitor)
             },
-            'v4_sdk_info': self.sdk_info.copy()
+            'sdk_info': self.sdk_info.copy()
         }
         
         # Add health status if available
@@ -533,7 +533,7 @@ def main():
     """Main entry point"""
     import argparse
     
-    parser = argparse.ArgumentParser(description='Nutanix SNMP Daemon (v4 SDK)')
+    parser = argparse.ArgumentParser(description='Nutanix SNMP Daemon')
     parser.add_argument('--config', '-c', help='Configuration file path')
     parser.add_argument('--test', '-t', action='store_true', help='Test mode (don\'t require API connection)')
     parser.add_argument('--create-config', help='Create default configuration file at specified path')
@@ -543,7 +543,7 @@ def main():
     args = parser.parse_args()
     
     if args.version:
-        print("Nutanix SNMP Daemon v1.0.0 (v4 SDK)")
+        print("Nutanix SNMP Daemon v2.0.0")
         sys.exit(0)
     
     if args.create_config:
@@ -562,7 +562,7 @@ def main():
         
         if args.status:
             status = daemon.get_status()
-            print("Daemon Status (v4 SDK):")
+            print("Daemon Status:")
             for key, value in status.items():
                 print(f"  {key}: {value}")
             sys.exit(0)

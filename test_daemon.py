@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Test script for Nutanix SNMP Daemon (v4 SDK Version)
+Test script for Nutanix SNMP Daemon (Modern SDK Version)
 
-This script tests the connection to Nutanix Prism Central using the official v4 SDK
+This script tests the connection to Nutanix Prism Central using the official modern SDK
 and SNMP functionality with the new modular structure and YAML configuration.
 """
 
@@ -41,12 +41,6 @@ def test_config_loading(config_path=None):
                 print(f"✗ Missing required section: {section}")
                 return False, None
         
-        # Check for v4 SDK configuration
-        if 'v4_sdk' in config:
-            print("✓ v4 SDK configuration section found")
-        else:
-            print("⚠ v4 SDK configuration section not found (using defaults)")
-        
         return True, config
         
     except Exception as e:
@@ -54,8 +48,8 @@ def test_config_loading(config_path=None):
         return False, None
 
 def test_sdk_imports():
-    """Test v4 SDK imports"""
-    print("\nTesting v4 SDK imports...")
+    """Test modern SDK imports"""
+    print("\nTesting modern SDK imports...")
     
     try:
         # Test cluster management SDK
@@ -80,7 +74,7 @@ def test_sdk_imports():
         
     except ImportError as e:
         print(f"✗ SDK import failed: {e}")
-        print("Make sure you have installed the v4 SDK packages:")
+        print("Make sure you have installed the modern SDK packages:")
         print("  pip install ntnx-clustermgmt-py-client ntnx-vmm-py-client ntnx-prism-py-client")
         return False
     except Exception as e:
@@ -88,8 +82,8 @@ def test_sdk_imports():
         return False
 
 def test_nutanix_connection(config):
-    """Test connection to Nutanix Prism Central using v4 SDK"""
-    print("\nTesting Nutanix Prism Central connection (v4 SDK)...")
+    """Test connection to Nutanix Prism Central using modern SDK"""
+    print("\nTesting Nutanix Prism Central connection (Modern SDK)...")
     
     try:
         nutanix_config = config['nutanix']
@@ -97,7 +91,7 @@ def test_nutanix_connection(config):
         
         # Test basic connectivity
         if api_client.health_check():
-            print("✓ Successfully connected to Prism Central using v4 SDK")
+            print("✓ Successfully connected to Prism Central using modern SDK")
             
             # Test data retrieval
             clusters = api_client.get_clusters()
@@ -116,7 +110,7 @@ def test_nutanix_connection(config):
                     print(f"✓ Testing stats for cluster: {cluster_name}")
                     stats = api_client.get_cluster_stats(cluster_uuid)
                     if stats:
-                        print("✓ Successfully retrieved cluster statistics using v4 SDK")
+                        print("✓ Successfully retrieved cluster statistics using modern SDK")
                         print(f"  Sample stats keys: {list(stats.keys())[:5]}")
                     else:
                         print("⚠ Cluster statistics not available (may not be supported)")
@@ -131,7 +125,7 @@ def test_nutanix_connection(config):
                     print(f"✓ Testing stats for host: {host_name}")
                     stats = api_client.get_host_stats(host_uuid)
                     if stats:
-                        print("✓ Successfully retrieved host statistics using v4 SDK")
+                        print("✓ Successfully retrieved host statistics using modern SDK")
                         print(f"  Sample stats keys: {list(stats.keys())[:5]}")
                     else:
                         print("⚠ Host statistics not available (may not be supported)")
@@ -149,46 +143,8 @@ def test_nutanix_connection(config):
         print("This could be due to:")
         print("  - Incorrect credentials")
         print("  - Network connectivity issues")
-        print("  - Prism Central not running v4 API compatible version")
+        print("  - Prism Central not running modern API compatible version")
         print("  - Firewall blocking connection")
-        return False
-
-def test_sdk_configuration(config):
-    """Test v4 SDK specific configuration"""
-    print("\nTesting v4 SDK configuration...")
-    
-    try:
-        v4_config = config.get('v4_sdk', {})
-        
-        # Check SDK namespace enablement
-        namespaces = ['clustermgmt', 'vmm', 'prism', 'networking', 'volumes']
-        enabled_namespaces = []
-        for ns in namespaces:
-            key = f"enable_{ns}"
-            if v4_config.get(key, False):
-                enabled_namespaces.append(ns)
-        
-        print(f"✓ Enabled SDK namespaces: {enabled_namespaces}")
-        
-        # Check statistics configuration
-        stats_config = v4_config.get('stats', {})
-        if stats_config.get('enabled', True):
-            print("✓ Statistics collection enabled")
-            print(f"  Time range: {stats_config.get('time_range_minutes', 5)} minutes")
-            print(f"  Stat type: {stats_config.get('stat_type', 'AVG')}")
-        else:
-            print("⚠ Statistics collection disabled")
-        
-        # Check rate limiting configuration
-        rate_config = v4_config.get('rate_limiting', {})
-        if rate_config.get('enable_backoff', True):
-            print("✓ Rate limiting backoff enabled")
-            print(f"  Max requests per minute: {rate_config.get('max_requests_per_minute', 300)}")
-        
-        return True
-        
-    except Exception as e:
-        print(f"✗ v4 SDK configuration test failed: {e}")
         return False
 
 def test_sdk_version_compatibility():
@@ -213,9 +169,9 @@ def test_sdk_version_compatibility():
         # Check for major version compatibility
         for version, name in [(clustermgmt_version, 'clustermgmt'), (vmm_version, 'vmm'), (prism_version, 'prism')]:
             if version != 'Unknown' and version.startswith('4.'):
-                print(f"✓ {name} SDK is v4 compatible")
+                print(f"✓ {name} SDK is compatible")
             elif version != 'Unknown':
-                print(f"⚠ {name} SDK version {version} may not be v4 compatible")
+                print(f"⚠ {name} SDK version {version} may need verification")
             else:
                 print(f"⚠ {name} SDK version could not be determined")
         
@@ -324,7 +280,7 @@ def test_permissions():
         print(f"⚠ Log file test skipped (file system constraints)")
 
 def create_sample_config():
-    """Create a sample configuration file for v4 SDK testing"""
+    """Create a sample configuration file for modern SDK testing"""
     sample_config = {
         'nutanix': {
             'prism_central_ip': '10.1.1.100',
@@ -374,24 +330,6 @@ def create_sample_config():
             'max_concurrent_requests': 10,
             'cache_timeout': 30,
             'enable_metrics_cache': True
-        },
-        'v4_sdk': {
-            'enable_clustermgmt': True,
-            'enable_vmm': True,
-            'enable_prism': True,
-            'enable_networking': False,
-            'enable_volumes': False,
-            'stats': {
-                'enabled': True,
-                'time_range_minutes': 5,
-                'stat_type': 'AVG',
-                'default_page_size': 1000
-            },
-            'rate_limiting': {
-                'enable_backoff': True,
-                'max_requests_per_minute': 300,
-                'retry_on_rate_limit': True
-            }
         }
     }
     
@@ -399,12 +337,12 @@ def create_sample_config():
     with open(config_file, 'w') as f:
         yaml.dump(sample_config, f, default_flow_style=False, indent=2)
     
-    print(f"Sample v4 SDK configuration created: {config_file}")
+    print(f"Sample modern SDK configuration created: {config_file}")
     return config_file
 
 def main():
     """Main test function"""
-    print("Nutanix SNMP Daemon Test Script (v4 SDK Version)")
+    print("Nutanix SNMP Daemon Test Script (Modern SDK Version)")
     print("=" * 55)
     
     # Check for config file argument
@@ -414,7 +352,7 @@ def main():
     
     # If no config provided, create a sample one
     if not config_path:
-        print("No configuration file specified. Creating sample v4 SDK configuration...")
+        print("No configuration file specified. Creating sample modern SDK configuration...")
         config_path = create_sample_config()
         print("Please edit the configuration file with your actual settings before running the daemon.")
         print()
@@ -423,13 +361,13 @@ def main():
     success = True
     config = None
     
-    # Test v4 SDK imports first
+    # Test modern SDK imports first
     sdk_import_success = test_sdk_imports()
     success &= sdk_import_success
     
     if not sdk_import_success:
         print("\n" + "=" * 55)
-        print("✗ Cannot continue without v4 SDK packages!")
+        print("✗ Cannot continue without modern SDK packages!")
         print("Please install the required packages:")
         print("  pip install ntnx-clustermgmt-py-client ntnx-vmm-py-client ntnx-prism-py-client")
         sys.exit(1)
@@ -445,7 +383,6 @@ def main():
     
     # Test individual components
     success &= test_sdk_version_compatibility()
-    success &= test_sdk_configuration(config)
     success &= test_snmp_configuration(config)
     success &= test_snmp_agent_creation(config)
     success &= test_nutanix_connection(config)
@@ -456,13 +393,13 @@ def main():
     print("\n" + "=" * 55)
     if success:
         print("✓ All critical tests passed!")
-        print("The v4 SDK daemon should work correctly with this configuration.")
+        print("The modern SDK daemon should work correctly with this configuration.")
         print()
         print("To start the daemon:")
         print(f"  python3 nutanix_snmp_daemon.py --config {config_path}")
         print()
-        print("Migration notes:")
-        print("- The daemon now uses official Nutanix v4 SDK packages")
+        print("Features:")
+        print("- The daemon uses official Nutanix modern SDK packages")
         print("- Better error handling and retry mechanisms")
         print("- Improved statistics collection")
         print("- Rate limiting and connection pooling support")
