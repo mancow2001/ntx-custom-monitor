@@ -1,8 +1,26 @@
-requests>=2.28.0,<3.0.0
-urllib3>=1.26.0,<3.0.0
-pysnmp>=6.0.0,<7.0.0
-pyasn1>=0.4.6
-pyasn1-modules>=0.2.6
-pycryptodomex>=3.15.0
+# Nutanix SNMP Daemon Requirements (Updated for v4 SDK)
+
+# Core dependencies
 PyYAML>=6.0,<7.0.0
+
+# SNMP libraries - compatible versions
+pysnmp>=6.0.0,<7.0.0
+pyasn1>=0.4.6,<1.0.0
+pyasn1-modules>=0.2.6,<1.0.0
+pycryptodomex>=3.15.0,<4.0.0
+
+# Nutanix v4 SDK packages
+ntnx-clustermgmt-py-client>=4.0.1,<5.0.0
+ntnx-vmm-py-client>=4.0.1,<5.0.0
+ntnx-prism-py-client>=4.0.1,<5.0.0
+
+# Optional SDK packages (uncomment if needed)
+# ntnx-networking-py-client>=4.0.1,<5.0.0
+# ntnx-volumes-py-client>=4.0.1,<5.0.0
+# ntnx-opsmgmt-py-client>=4.0.1,<5.0.0
+
+# HTTP library for any remaining direct API calls (if needed)
+urllib3>=1.26.0,<3.0.0
+
+# Compatibility for older Python versions
 ipaddress>=1.0.23; python_version<"3.3"

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Nutanix SNMP Daemon Installation Script (Modular Version)
+# Nutanix SNMP Daemon Installation Script (v4 SDK Version)
 
 set -e
 
@@ -16,12 +16,12 @@ LOGROTATE_FILE="/etc/logrotate.d/nutanix-snmp-daemon"
 
 # Script info
 SCRIPT_NAME=$(basename "$0")
-VERSION="2.0.0"
+VERSION="2.0.0-v4SDK"
 
 # Function to display help
 show_help() {
     cat << EOF
-Nutanix SNMP Daemon Installer v$VERSION
+Nutanix SNMP Daemon Installer v$VERSION (v4 SDK)
 
 Usage: $SCRIPT_NAME [OPTIONS]
 
@@ -32,21 +32,24 @@ OPTIONS:
     --keep-data            Keep data and log files during uninstall
     --keep-all             Keep both configuration and data during uninstall
     --fix-dependencies     Fix Python dependency issues
+    --install-v4-sdk       Install/upgrade v4 SDK packages only
     -v, --version          Show version information
 
 EXAMPLES:
-    $SCRIPT_NAME                    # Install the daemon
+    $SCRIPT_NAME                    # Install the daemon with v4 SDK
     $SCRIPT_NAME -u                 # Uninstall completely
     $SCRIPT_NAME -u --keep-config   # Uninstall but keep configuration
     $SCRIPT_NAME -u --keep-all      # Uninstall but keep config and data
     $SCRIPT_NAME --fix-dependencies # Fix Python import issues
+    $SCRIPT_NAME --install-v4-sdk   # Install/upgrade only v4 SDK packages
 
 EOF
 }
 
 # Function to display version
 show_version() {
-    echo "Nutanix SNMP Daemon Installer v$VERSION"
+    echo "Nutanix SNMP Daemon Installer v$VERSION (v4 SDK)"
+    echo "Uses official Nutanix v4 Python SDK packages"
 }
 
 # Function to check if running as root
@@ -113,7 +116,7 @@ uninstall_daemon() {
         esac
     done
     
-    echo "Uninstalling Nutanix SNMP Daemon..."
+    echo "Uninstalling Nutanix SNMP Daemon (v4 SDK)..."
     echo "Keep config: $keep_config"
     echo "Keep data: $keep_data"
     echo ""
@@ -165,7 +168,7 @@ uninstall_daemon() {
     remove_user
     
     echo ""
-    echo "✓ Nutanix SNMP Daemon uninstalled successfully!"
+    echo "✓ Nutanix SNMP Daemon (v4 SDK) uninstalled successfully!"
     
     if [ "$keep_config" = true ] || [ "$keep_data" = true ]; then
         echo ""
@@ -231,6 +234,54 @@ create_directories() {
     echo "✓ Directories created and configured"
 }
 
+# Function to install v4 SDK packages only
+install_v4_sdk_packages() {
+    echo "Installing/upgrading Nutanix v4 SDK packages..."
+    
+    # Check if virtual environment exists
+    if [ ! -d "$INSTALL_DIR/venv" ]; then
+        echo "Error: Virtual environment not found at $INSTALL_DIR/venv"
+        echo "Please run the full installation first."
+        exit 1
+    fi
+    
+    # Upgrade pip first
+    sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/pip install --upgrade pip
+    
+    # Install v4 SDK packages with specific order
+    echo "Installing Core v4 SDK packages..."
+    sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/pip install --upgrade "ntnx-clustermgmt-py-client>=4.0.1,<5.0.0"
+    sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/pip install --upgrade "ntnx-vmm-py-client>=4.0.1,<5.0.0"
+    sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/pip install --upgrade "ntnx-prism-py-client>=4.0.1,<5.0.0"
+    
+    echo "Installing Optional v4 SDK packages..."
+    # These might fail if not available, so we use || true
+    sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/pip install --upgrade "ntnx-networking-py-client>=4.0.1,<5.0.0" || echo "⚠ Networking SDK not available"
+    sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/pip install --upgrade "ntnx-volumes-py-client>=4.0.1,<5.0.0" || echo "⚠ Volumes SDK not available"
+    sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/pip install --upgrade "ntnx-opsmgmt-py-client>=4.0.1,<5.0.0" || echo "⚠ OpsMgmt SDK not available"
+    
+    # Test critical imports
+    echo "Testing v4 SDK imports..."
+    sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/python3 -c "
+try:
+    from ntnx_clustermgmt_py_client import Configuration, ApiClient
+    from ntnx_clustermgmt_py_client.api.clusters_api import ClustersApi
+    from ntnx_vmm_py_client import Configuration as VmmConfig
+    from ntnx_vmm_py_client.api.vm_api import VmApi
+    from ntnx_prism_py_client import Configuration as PrismConfig
+    print('✓ All critical v4 SDK imports successful')
+except ImportError as e:
+    print(f'✗ v4 SDK import error: {e}')
+    exit(1)
+" || {
+        echo "Error: Failed to import v4 SDK modules"
+        echo "Please check the error messages above"
+        exit 1
+    }
+    
+    echo "✓ v4 SDK packages installed and tested successfully"
+}
+
 # Function to setup Python environment
 setup_python_env() {
     echo "Setting up Python virtual environment..."
@@ -242,59 +293,65 @@ setup_python_env() {
     sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/pip install --upgrade pip
     
     # Check if requirements.txt exists
-    if [ ! -f "requirements.txt" ]; then
-        echo "Error: requirements.txt not found in current directory"
-        exit 1
+    if [ ! -f "requirements_v4.txt" ]; then
+        echo "Error: requirements_v4.txt not found in current directory"
+        echo "Creating minimal requirements..."
+        
+        # Create minimal requirements for v4 SDK
+        cat > requirements_v4.txt << EOF
+# Nutanix SNMP Daemon Requirements (v4 SDK)
+PyYAML>=6.0,<7.0.0
+pysnmp>=6.0.0,<7.0.0
+pyasn1>=0.4.6,<1.0.0
+pyasn1-modules>=0.2.6,<1.0.0
+pycryptodomex>=3.15.0,<4.0.0
+ntnx-clustermgmt-py-client>=4.0.1,<5.0.0
+ntnx-vmm-py-client>=4.0.1,<5.0.0
+ntnx-prism-py-client>=4.0.1,<5.0.0
+urllib3>=1.26.0,<3.0.0
+EOF
     fi
     
     # Install Python dependencies
-    echo "Installing Python dependencies..."
+    echo "Installing Python dependencies from requirements_v4.txt..."
     
-    # Install dependencies with explicit order to avoid conflicts
+    # Install standard libraries first
+    echo "Installing standard libraries..."
+    sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/pip install "PyYAML>=6.0,<7.0.0"
+    sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/pip install "urllib3>=1.26.0,<3.0.0"
+    
+    # Install ASN.1 libraries
     echo "Installing ASN.1 libraries..."
     sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/pip install "pyasn1>=0.4.6,<1.0.0"
     sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/pip install "pyasn1-modules>=0.2.6,<1.0.0"
     
+    # Install cryptographic libraries
     echo "Installing cryptographic libraries..."
-    sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/pip install "pycryptodomex>=3.9.0,<4.0.0"
+    sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/pip install "pycryptodomex>=3.15.0,<4.0.0"
     
+    # Install SNMP libraries
     echo "Installing SNMP libraries..."
-    sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/pip install "pysnmp>=4.4.12,<6.0.0"
+    sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/pip install "pysnmp>=6.0.0,<7.0.0"
     
+    # Install v4 SDK packages
+    install_v4_sdk_packages
+    
+    # Install any remaining dependencies
     echo "Installing remaining dependencies..."
-    sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/pip install -r requirements.txt
+    sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/pip install -r requirements_v4.txt
     
-    # Test critical imports
-    echo "Testing Python imports..."
-    sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/python3 -c "
-try:
-    import yaml
-    import requests
-    from pyasn1.compat.octets import str2octs
-    from pysnmp.entity import engine, config
-    print('✓ All critical imports successful')
-except ImportError as e:
-    print(f'✗ Import error: {e}')
-    exit(1)
-" || {
-        echo "Error: Failed to import required modules"
-        echo "Please check the error messages above and run:"
-        echo "  sudo $0 --fix-dependencies"
-        exit 1
-    }
-    
-    echo "✓ Python environment configured successfully"
+    echo "✓ Python environment configured successfully with v4 SDK"
 }
 
 # Function to install daemon files
 install_daemon_files() {
-    echo "Installing daemon files..."
+    echo "Installing daemon files (v4 SDK version)..."
     
-    # Required Python files
+    # Required Python files for v4 SDK version
     local required_files=(
-        "nutanix_snmp_daemon.py"
+        "nutanix_snmp_daemon_v4.py"
         "config_manager.py"
-        "nutanix_api.py"
+        "nutanix_api_v4.py"
         "metrics_collector.py"
         "snmp_agent.py"
     )
@@ -303,6 +360,7 @@ install_daemon_files() {
     for file in "${required_files[@]}"; do
         if [ ! -f "$file" ]; then
             echo "Error: Required file '$file' not found in current directory"
+            echo "Please make sure you have the v4 SDK version of the files"
             exit 1
         fi
     done
@@ -315,17 +373,17 @@ install_daemon_files() {
     done
     
     # Make main daemon executable
-    chmod +x $INSTALL_DIR/nutanix_snmp_daemon.py
+    chmod +x $INSTALL_DIR/nutanix_snmp_daemon_v4.py
     
     # Copy test script if it exists
-    if [ -f "test_modular_daemon.py" ]; then
-        cp test_modular_daemon.py $INSTALL_DIR/
-        chown $DAEMON_USER:$DAEMON_GROUP $INSTALL_DIR/test_modular_daemon.py
-        chmod +x $INSTALL_DIR/test_modular_daemon.py
-        echo "✓ Installed test_modular_daemon.py"
+    if [ -f "test_v4_daemon.py" ]; then
+        cp test_v4_daemon.py $INSTALL_DIR/
+        chown $DAEMON_USER:$DAEMON_GROUP $INSTALL_DIR/test_v4_daemon.py
+        chmod +x $INSTALL_DIR/test_v4_daemon.py
+        echo "✓ Installed test_v4_daemon.py"
     fi
     
-    echo "✓ Daemon files installed"
+    echo "✓ Daemon files installed (v4 SDK version)"
 }
 
 # Function to install configuration
@@ -333,16 +391,22 @@ install_configuration() {
     echo "Installing configuration file..."
     
     if [ ! -f $CONFIG_FILE ]; then
-        if [ -f "config.yaml" ]; then
-            cp config.yaml $CONFIG_FILE
+        if [ -f "config_v4.yaml" ]; then
+            cp config_v4.yaml $CONFIG_FILE
             chmod 640 $CONFIG_FILE
             chown root:$DAEMON_GROUP $CONFIG_FILE
             echo "✓ Configuration file installed at $CONFIG_FILE"
             echo "⚠  Please edit this file with your Nutanix and SNMP settings before starting the service."
+        elif [ -f "config.yaml" ]; then
+            cp config.yaml $CONFIG_FILE
+            chmod 640 $CONFIG_FILE
+            chown root:$DAEMON_GROUP $CONFIG_FILE
+            echo "✓ Configuration file installed at $CONFIG_FILE"
+            echo "⚠  Please edit this file with your settings and consider adding v4 SDK specific options."
         else
-            echo "Warning: config.yaml not found. Creating default configuration..."
+            echo "Warning: No configuration file found. Creating default configuration..."
             # Create default configuration using the daemon itself
-            sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/python3 $INSTALL_DIR/nutanix_snmp_daemon.py --create-config $CONFIG_FILE 2>/dev/null || {
+            sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/python3 $INSTALL_DIR/nutanix_snmp_daemon_v4.py --create-config $CONFIG_FILE 2>/dev/null || {
                 echo "Error: Could not create default configuration"
                 exit 1
             }
@@ -361,7 +425,7 @@ create_systemd_service() {
     
     cat > $SERVICE_FILE << EOF
 [Unit]
-Description=Nutanix SNMP Daemon (Modular)
+Description=Nutanix SNMP Daemon (v4 SDK)
 Documentation=https://github.com/your-repo/nutanix-snmp-daemon
 After=network.target
 Wants=network.target
@@ -371,7 +435,7 @@ Type=simple
 User=$DAEMON_USER
 Group=$DAEMON_GROUP
 WorkingDirectory=$INSTALL_DIR
-ExecStart=$INSTALL_DIR/venv/bin/python3 $INSTALL_DIR/nutanix_snmp_daemon.py --config $CONFIG_FILE
+ExecStart=$INSTALL_DIR/venv/bin/python3 $INSTALL_DIR/nutanix_snmp_daemon_v4.py --config $CONFIG_FILE
 ExecReload=/bin/kill -HUP \$MAINPID
 KillMode=mixed
 KillSignal=SIGTERM
@@ -427,7 +491,7 @@ EOF
 
 # Function to install the daemon
 install_daemon() {
-    echo "Installing Nutanix SNMP Daemon (Modular Version) v$VERSION..."
+    echo "Installing Nutanix SNMP Daemon (v4 SDK Version) v$VERSION..."
     echo ""
     
     check_root
@@ -445,7 +509,7 @@ install_daemon() {
     echo ""
     echo "Next steps:"
     echo "1. Edit the configuration file: sudo nano $CONFIG_FILE"
-    echo "2. Test the configuration: sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/python3 $INSTALL_DIR/test_modular_daemon.py $CONFIG_FILE"
+    echo "2. Test the configuration: sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/python3 $INSTALL_DIR/test_v4_daemon.py $CONFIG_FILE"
     echo "3. Enable the service: sudo systemctl enable nutanix-snmp-daemon"
     echo "4. Start the service: sudo systemctl start nutanix-snmp-daemon"
     echo "5. Check status: sudo systemctl status nutanix-snmp-daemon"
@@ -460,8 +524,74 @@ install_daemon() {
     echo "- Register your own enterprise OID and update the base_oid setting"
     echo "- Configure your monitoring tool to use the SNMP v3 credentials"
     echo "- Ensure firewall allows SNMP traffic on the configured port (default: 161)"
+    echo "- Verify your Prism Central supports v4 APIs (PC 2024.1+ recommended)"
     echo ""
-    echo "For CLI options, run: sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/python3 $INSTALL_DIR/nutanix_snmp_daemon.py --help"
+    echo "v4 SDK Features:"
+    echo "- Uses official Nutanix Python SDK packages"
+    echo "- Improved error handling and retry mechanisms"
+    echo "- Better performance and connection management"
+    echo "- Enhanced statistics collection capabilities"
+    echo ""
+    echo "For CLI options, run: sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/python3 $INSTALL_DIR/nutanix_snmp_daemon_v4.py --help"
+}
+
+# Function to fix dependencies
+fix_dependencies() {
+    echo "Fixing Python dependencies (v4 SDK)..."
+    
+    check_root
+    
+    # Check if virtual environment exists
+    if [ ! -d "$INSTALL_DIR/venv" ]; then
+        echo "Error: Virtual environment not found at $INSTALL_DIR/venv"
+        echo "Please run the full installation first."
+        exit 1
+    fi
+    
+    echo "Reinstalling Python dependencies in correct order..."
+    
+    # Remove and recreate virtual environment
+    echo "Recreating virtual environment..."
+    sudo -u $DAEMON_USER rm -rf $INSTALL_DIR/venv
+    sudo -u $DAEMON_USER python3 -m venv $INSTALL_DIR/venv
+    
+    # Upgrade pip first
+    sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/pip install --upgrade pip
+    
+    # Install dependencies in specific order
+    install_v4_sdk_packages
+    
+    # Install other dependencies if requirements file exists
+    if [ -f "requirements_v4.txt" ]; then
+        echo "Installing remaining dependencies..."
+        sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/pip install -r requirements_v4.txt
+    fi
+    
+    # Test imports
+    echo "Testing imports..."
+    sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/python3 -c "
+try:
+    from ntnx_clustermgmt_py_client import Configuration, ApiClient
+    from ntnx_vmm_py_client import Configuration as VmmConfig
+    from ntnx_prism_py_client import Configuration as PrismConfig
+    import yaml
+    print('✓ All imports successful')
+except ImportError as e:
+    print(f'✗ Import error: {e}')
+    exit(1)
+"
+    
+    if [ $? -eq 0 ]; then
+        echo "✓ Dependencies fixed successfully"
+        echo ""
+        echo "You can now restart the service:"
+        echo "  sudo systemctl restart nutanix-snmp-daemon"
+        echo "  sudo systemctl status nutanix-snmp-daemon"
+    else
+        echo "✗ There are still import issues"
+        echo "You may need to check your system Python installation"
+        exit 1
+    fi
 }
 
 # Main script logic
@@ -485,93 +615,11 @@ main() {
             fix_dependencies
             exit 0
             ;;
-        "")
-            install_daemon
+        --install-v4-sdk)
+            check_root
+            install_v4_sdk_packages
+            exit 0
             ;;
-        *)
-            echo "Error: Unknown option '$1'"
-            echo "Use '$SCRIPT_NAME --help' for usage information."
-            exit 1
-            ;;
-    esac
-}
-
-# Function to fix dependencies
-fix_dependencies() {
-    echo "Fixing Python dependencies..."
-    
-    check_root
-    
-    # Check if virtual environment exists
-    if [ ! -d "$INSTALL_DIR/venv" ]; then
-        echo "Error: Virtual environment not found at $INSTALL_DIR/venv"
-        echo "Please run the full installation first."
-        exit 1
-    fi
-        echo "Error: Virtual environment not found at $INSTALL_DIR/venv"
-        echo "Please run the full installation first."
-        exit 1
-    fi
-    
-    echo "Reinstalling Python dependencies in correct order..."
-    
-    # Upgrade pip first
-    sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/pip install --upgrade pip
-    
-    # Install ASN.1 libraries first
-    echo "Installing ASN.1 libraries..."
-    sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/pip install --force-reinstall "pyasn1>=0.4.6,<1.0.0"
-    sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/pip install --force-reinstall "pyasn1-modules>=0.2.6,<1.0.0"
-    
-    # Install crypto libraries
-    echo "Installing cryptographic libraries..."
-    sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/pip install --force-reinstall "pycryptodomex>=3.9.0,<4.0.0"
-    
-    # Install SNMP libraries
-    echo "Installing SNMP libraries..."
-    sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/pip install --force-reinstall "pysnmp>=4.4.12,<6.0.0"
-    
-    # Install other dependencies
-    echo "Installing remaining dependencies..."
-    if [ -f "requirements.txt" ]; then
-        sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/pip install --force-reinstall -r requirements.txt
-    else
-        # Install from known requirements
-        sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/pip install --force-reinstall "requests>=2.28.0,<3.0.0"
-        sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/pip install --force-reinstall "urllib3>=1.26.0,<3.0.0"
-        sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/pip install --force-reinstall "PyYAML>=6.0,<7.0.0"
-    fi
-    
-    # Test imports
-    echo "Testing imports..."
-    sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/python3 -c "
-try:
-    from pyasn1.compat.octets import str2octs
-    from pysnmp.entity import engine, config
-    from pysnmp.entity.rfc3413 import cmdrsp, context
-    from pysnmp.carrier.asyncore import dgram
-    import yaml
-    import requests
-    print('✓ All imports successful')
-except ImportError as e:
-    print(f'✗ Import error: {e}')
-    exit(1)
-"
-    
-    if [ $? -eq 0 ]; then
-        echo "✓ Dependencies fixed successfully"
-        echo ""
-        echo "You can now restart the service:"
-        echo "  sudo systemctl restart nutanix-snmp-daemon"
-        echo "  sudo systemctl status nutanix-snmp-daemon"
-    else
-        echo "✗ There are still import issues"
-        echo "You may need to recreate the virtual environment:"
-        echo "  sudo rm -rf $INSTALL_DIR/venv"
-        echo "  sudo $0"
-        exit 1
-    fi
-}
         "")
             install_daemon
             ;;

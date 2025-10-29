@@ -1,17 +1,43 @@
 #!/usr/bin/env python3
 """
-Nutanix API Client Module
+Nutanix API Client Module (v4 SDK)
 
-Handles communication with Nutanix Prism Central API.
+Handles communication with Nutanix Prism Central using the official v4 SDK.
 """
 
 import logging
 import time
-from typing import Dict, List, Optional, Any
-import requests
-import urllib3
-from requests.adapters import HTTPAdapter
-from requests.packages.urllib3.util.retry import Retry
+from typing import Dict, List, Optional, Any, Union
+from datetime import datetime, timedelta
+
+# Nutanix v4 SDK imports
+from ntnx_clustermgmt_py_client import Configuration as ClusterMgmtConfig
+from ntnx_clustermgmt_py_client import ApiClient as ClusterMgmtApiClient
+from ntnx_clustermgmt_py_client.api.clusters_api import ClustersApi
+from ntnx_clustermgmt_py_client.api.hosts_api import HostsApi
+from ntnx_clustermgmt_py_client.rest import ApiException as ClusterMgmtApiException
+
+from ntnx_vmm_py_client import Configuration as VmmConfig
+from ntnx_vmm_py_client import ApiClient as VmmApiClient
+from ntnx_vmm_py_client.api.vm_api import VmApi
+from ntnx_vmm_py_client.rest import ApiException as VmmApiException
+
+from ntnx_prism_py_client import Configuration as PrismConfig
+from ntnx_prism_py_client import ApiClient as PrismApiClient
+from ntnx_prism_py_client.rest import ApiException as PrismApiException
+
+# Import the statistics models
+try:
+    from ntnx_clustermgmt_py_client.models.common.v1.stats.down_sampling_operator import DownSamplingOperator
+    from ntnx_clustermgmt_py_client.models.common.v1.stats.time_range_filter import TimeRangeFilter
+    from ntnx_vmm_py_client.models.common.v1.stats.down_sampling_operator import DownSamplingOperator as VmmDownSamplingOperator
+    from ntnx_vmm_py_client.models.common.v1.stats.time_range_filter import TimeRangeFilter as VmmTimeRangeFilter
+except ImportError as e:
+    logging.warning(f"Could not import statistics models: {e}")
+    DownSamplingOperator = None
+    TimeRangeFilter = None
+    VmmDownSamplingOperator = None
+    VmmTimeRangeFilter = None
 
 logger = logging.getLogger(__name__)
 
@@ -20,118 +46,114 @@ class NutanixAPIError(Exception):
     pass
 
 class NutanixAPIClient:
-    """Handles communication with Nutanix Prism Central API"""
+    """Handles communication with Nutanix Prism Central using v4 SDK"""
     
     def __init__(self, config: Dict[str, Any]):
         self.config = config
-        self.base_url = f"https://{config['prism_central_ip']}:{config.get('port', 9440)}/api/nutanix/v3"
-        self.auth = (config['username'], config['password'])
-        
-        # Disable SSL warnings if verification is disabled
-        if not config.get('ssl_verify', False):
-            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-        
-        # Setup session with retry strategy
-        self.session = self._create_session()
+        self.prism_central_ip = config['prism_central_ip']
+        self.port = config.get('port', 9440)
+        self.username = config['username']
+        self.password = config['password']
+        self.ssl_verify = config.get('ssl_verify', False)
+        self.timeout = config.get('timeout', 30)
         
         # Connection health tracking
         self.last_successful_request = None
         self.consecutive_failures = 0
         self.max_failures = config.get('retry_count', 3)
         
-    def _create_session(self) -> requests.Session:
-        """Create requests session with retry strategy"""
-        session = requests.Session()
-        session.auth = self.auth
-        session.verify = self.config.get('ssl_verify', False)
+        # Initialize SDK configurations
+        self._setup_sdk_configs()
         
-        # Setup retry strategy
-        retry_strategy = Retry(
-            total=self.config.get('retry_count', 3),
-            backoff_factor=1,
-            status_forcelist=[429, 500, 502, 503, 504],
-            method_whitelist=["HEAD", "GET", "PUT", "DELETE", "OPTIONS", "TRACE", "POST"]
-        )
+        # Initialize API clients
+        self._setup_api_clients()
         
-        adapter = HTTPAdapter(
-            max_retries=retry_strategy,
-            pool_connections=self.config.get('connection_pool_size', 5),
-            pool_maxsize=self.config.get('connection_pool_size', 5)
-        )
-        
-        session.mount("http://", adapter)
-        session.mount("https://", adapter)
-        
-        return session
+        logger.info(f"Nutanix v4 SDK client initialized for {self.prism_central_ip}:{self.port}")
     
-    def _make_request(self, method: str, endpoint: str, data: Optional[dict] = None) -> Optional[dict]:
-        """Make HTTP request to Nutanix API with error handling"""
-        url = f"{self.base_url}/{endpoint}"
-        headers = {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json'
+    def _setup_sdk_configs(self):
+        """Setup SDK configurations for all namespaces"""
+        base_config = {
+            'host': self.prism_central_ip,
+            'port': self.port,
+            'username': self.username,
+            'password': self.password,
+            'verify_ssl': self.ssl_verify,
+            'ssl_ca_cert': None,
+            'connection_pool_maxsize': self.config.get('connection_pool_size', 5),
+            'proxy': None,
+            'proxy_headers': None,
         }
         
-        timeout = self.config.get('timeout', 30)
+        # Cluster Management configuration
+        self.clustermgmt_config = ClusterMgmtConfig()
+        for key, value in base_config.items():
+            setattr(self.clustermgmt_config, key, value)
         
+        # VMM configuration
+        self.vmm_config = VmmConfig()
+        for key, value in base_config.items():
+            setattr(self.vmm_config, key, value)
+        
+        # Prism configuration
+        self.prism_config = PrismConfig()
+        for key, value in base_config.items():
+            setattr(self.prism_config, key, value)
+    
+    def _setup_api_clients(self):
+        """Setup API clients for all namespaces"""
         try:
-            start_time = time.time()
+            # Cluster Management API client
+            self.clustermgmt_client = ClusterMgmtApiClient(configuration=self.clustermgmt_config)
+            self.clusters_api = ClustersApi(api_client=self.clustermgmt_client)
+            self.hosts_api = HostsApi(api_client=self.clustermgmt_client)
             
-            if method.upper() == 'GET':
-                response = self.session.get(url, headers=headers, timeout=timeout)
-            elif method.upper() == 'POST':
-                response = self.session.post(url, headers=headers, json=data, timeout=timeout)
-            else:
-                raise ValueError(f"Unsupported HTTP method: {method}")
+            # VMM API client
+            self.vmm_client = VmmApiClient(configuration=self.vmm_config)
+            self.vm_api = VmApi(api_client=self.vmm_client)
             
-            # Log request details if debugging is enabled
-            if logger.isEnabledFor(logging.DEBUG):
-                duration = time.time() - start_time
-                logger.debug(f"{method} {endpoint} - {response.status_code} ({duration:.2f}s)")
+            # Prism API client
+            self.prism_client = PrismApiClient(configuration=self.prism_config)
             
-            response.raise_for_status()
+            logger.info("All v4 SDK API clients initialized successfully")
             
-            # Reset failure counter on success
-            self.consecutive_failures = 0
-            self.last_successful_request = time.time()
-            
-            return response.json()
-            
-        except requests.exceptions.HTTPError as e:
-            self.consecutive_failures += 1
-            logger.error(f"HTTP Error {response.status_code} for {endpoint}: {e}")
-            
-            if response.status_code == 401:
+        except Exception as e:
+            logger.error(f"Failed to initialize SDK API clients: {e}")
+            raise NutanixAPIError(f"SDK initialization failed: {e}")
+    
+    def _handle_api_exception(self, operation: str, exception: Exception):
+        """Handle API exceptions and update failure tracking"""
+        self.consecutive_failures += 1
+        
+        if hasattr(exception, 'status'):
+            status_code = exception.status
+            if status_code == 401:
+                logger.error(f"Authentication failed for {operation}")
                 raise NutanixAPIError("Authentication failed - check credentials")
-            elif response.status_code == 403:
+            elif status_code == 403:
+                logger.error(f"Access forbidden for {operation}")
                 raise NutanixAPIError("Access forbidden - check user permissions")
-            elif response.status_code == 404:
-                logger.warning(f"Endpoint not found: {endpoint}")
+            elif status_code == 404:
+                logger.warning(f"Resource not found for {operation}")
                 return None
             else:
-                raise NutanixAPIError(f"HTTP {response.status_code}: {e}")
-                
-        except requests.exceptions.ConnectionError as e:
-            self.consecutive_failures += 1
-            logger.error(f"Connection error for {endpoint}: {e}")
-            raise NutanixAPIError(f"Connection failed: {e}")
-            
-        except requests.exceptions.Timeout as e:
-            self.consecutive_failures += 1
-            logger.error(f"Timeout error for {endpoint}: {e}")
-            raise NutanixAPIError(f"Request timeout: {e}")
-            
-        except requests.exceptions.RequestException as e:
-            self.consecutive_failures += 1
-            logger.error(f"Request error for {endpoint}: {e}")
-            raise NutanixAPIError(f"Request failed: {e}")
+                logger.error(f"HTTP {status_code} error for {operation}: {exception}")
+                raise NutanixAPIError(f"HTTP {status_code}: {exception}")
+        else:
+            logger.error(f"API error for {operation}: {exception}")
+            raise NutanixAPIError(f"API error: {exception}")
+    
+    def _mark_success(self):
+        """Mark a successful API call"""
+        self.consecutive_failures = 0
+        self.last_successful_request = time.time()
     
     def health_check(self) -> bool:
         """Perform a health check on the API connection"""
         try:
             # Simple API call to test connectivity
-            response = self._make_request("GET", "clusters/list")
-            return response is not None
+            clusters = self.get_clusters()
+            self._mark_success()
+            return clusters is not None
         except Exception as e:
             logger.warning(f"Health check failed: {e}")
             return False
@@ -155,68 +177,310 @@ class NutanixAPIClient:
     def get_clusters(self) -> List[Dict]:
         """Get list of all clusters"""
         try:
-            data = {"kind": "cluster"}
-            response = self._make_request("POST", "clusters/list", data)
-            clusters = response.get("entities", []) if response else []
-            logger.info(f"Retrieved {len(clusters)} clusters")
+            logger.debug("Fetching clusters using v4 SDK")
+            
+            # Use the clusters API to list all clusters
+            response = self.clusters_api.list_clusters(
+                _limit=1000,  # Set a reasonable limit
+                _page=1
+            )
+            
+            clusters = []
+            if hasattr(response, 'data') and response.data:
+                for cluster in response.data:
+                    # Convert the SDK object to dictionary format
+                    cluster_dict = {
+                        'metadata': {
+                            'uuid': getattr(cluster, 'ext_id', None),
+                            'name': getattr(cluster, 'name', 'Unknown')
+                        },
+                        'spec': {
+                            'name': getattr(cluster, 'name', 'Unknown')
+                        },
+                        'status': {
+                            'state': 'COMPLETE'  # Assume complete for listed clusters
+                        }
+                    }
+                    clusters.append(cluster_dict)
+            
+            self._mark_success()
+            logger.info(f"Retrieved {len(clusters)} clusters using v4 SDK")
             return clusters
-        except Exception as e:
-            logger.error(f"Failed to get clusters: {e}")
+            
+        except (ClusterMgmtApiException, Exception) as e:
+            self._handle_api_exception("get_clusters", e)
             return []
     
     def get_hosts(self) -> List[Dict]:
         """Get list of all hosts"""
         try:
-            data = {"kind": "host"}
-            response = self._make_request("POST", "hosts/list", data)
-            hosts = response.get("entities", []) if response else []
-            logger.info(f"Retrieved {len(hosts)} hosts")
+            logger.debug("Fetching hosts using v4 SDK")
+            
+            # Use the hosts API to list all hosts
+            response = self.hosts_api.list_hosts(
+                _limit=1000,  # Set a reasonable limit
+                _page=1
+            )
+            
+            hosts = []
+            if hasattr(response, 'data') and response.data:
+                for host in response.data:
+                    # Convert the SDK object to dictionary format
+                    host_dict = {
+                        'metadata': {
+                            'uuid': getattr(host, 'ext_id', None),
+                            'name': getattr(host, 'name', 'Unknown')
+                        },
+                        'spec': {
+                            'name': getattr(host, 'name', 'Unknown')
+                        },
+                        'status': {
+                            'state': 'COMPLETE'  # Assume complete for listed hosts
+                        }
+                    }
+                    hosts.append(host_dict)
+            
+            self._mark_success()
+            logger.info(f"Retrieved {len(hosts)} hosts using v4 SDK")
             return hosts
-        except Exception as e:
-            logger.error(f"Failed to get hosts: {e}")
+            
+        except (ClusterMgmtApiException, Exception) as e:
+            self._handle_api_exception("get_hosts", e)
             return []
     
     def get_vms(self) -> List[Dict]:
         """Get list of all VMs"""
         try:
-            data = {"kind": "vm"}
-            response = self._make_request("POST", "vms/list", data)
-            vms = response.get("entities", []) if response else []
-            logger.info(f"Retrieved {len(vms)} VMs")
+            logger.debug("Fetching VMs using v4 SDK")
+            
+            # Use the VM API to list all VMs
+            response = self.vm_api.list_vms(
+                _limit=1000,  # Set a reasonable limit
+                _page=1
+            )
+            
+            vms = []
+            if hasattr(response, 'data') and response.data:
+                for vm in response.data:
+                    # Convert the SDK object to dictionary format
+                    vm_dict = {
+                        'metadata': {
+                            'uuid': getattr(vm, 'ext_id', None),
+                            'name': getattr(vm, 'name', 'Unknown')
+                        },
+                        'spec': {
+                            'name': getattr(vm, 'name', 'Unknown')
+                        },
+                        'status': {
+                            'state': 'COMPLETE'  # Assume complete for listed VMs
+                        }
+                    }
+                    vms.append(vm_dict)
+            
+            self._mark_success()
+            logger.info(f"Retrieved {len(vms)} VMs using v4 SDK")
             return vms
-        except Exception as e:
-            logger.error(f"Failed to get VMs: {e}")
+            
+        except (VmmApiException, Exception) as e:
+            self._handle_api_exception("get_vms", e)
             return []
     
     def get_cluster_stats(self, cluster_uuid: str) -> Optional[Dict]:
         """Get performance statistics for a specific cluster"""
         try:
-            endpoint = f"clusters/{cluster_uuid}/stats"
-            return self._make_request("GET", endpoint)
+            logger.debug(f"Fetching cluster stats for {cluster_uuid} using v4 SDK")
+            
+            # Create time range for the last 5 minutes
+            end_time = datetime.now()
+            start_time = end_time - timedelta(minutes=5)
+            
+            # Prepare the request parameters
+            kwargs = {
+                'ext_id': cluster_uuid,
+                '_stat_type': 'AVG',  # Average values
+                '_start_time': start_time.isoformat() + 'Z',
+                '_end_time': end_time.isoformat() + 'Z'
+            }
+            
+            try:
+                # Try to get cluster statistics
+                response = self.clusters_api.get_cluster_stats_by_id(**kwargs)
+                
+                if hasattr(response, 'data') and response.data:
+                    stats_data = response.data
+                    
+                    # Convert to the expected format
+                    stats = {}
+                    
+                    # Map v4 SDK stats to our expected format
+                    if hasattr(stats_data, 'hypervisor_cpu_usage_ppm'):
+                        stats['hypervisor_cpu_usage_ppm'] = getattr(stats_data, 'hypervisor_cpu_usage_ppm', 0)
+                    
+                    if hasattr(stats_data, 'aggregate_hypervisor_memory_usage_ppm'):
+                        stats['hypervisor_memory_usage_ppm'] = getattr(stats_data, 'aggregate_hypervisor_memory_usage_ppm', 0)
+                    
+                    if hasattr(stats_data, 'controller_avg_io_latency_usecs'):
+                        stats['controller_avg_io_latency_usecs'] = getattr(stats_data, 'controller_avg_io_latency_usecs', 0)
+                    
+                    if hasattr(stats_data, 'controller_avg_read_io_latency_usecs'):
+                        stats['controller_avg_read_io_latency_usecs'] = getattr(stats_data, 'controller_avg_read_io_latency_usecs', 0)
+                    
+                    if hasattr(stats_data, 'controller_avg_write_io_latency_usecs'):
+                        stats['controller_avg_write_io_latency_usecs'] = getattr(stats_data, 'controller_avg_write_io_latency_usecs', 0)
+                    
+                    if hasattr(stats_data, 'controller_io_bandwidth_kbps'):
+                        stats['controller_io_bandwidth_kBps'] = getattr(stats_data, 'controller_io_bandwidth_kbps', 0)
+                    
+                    if hasattr(stats_data, 'controller_num_iops'):
+                        stats['controller_num_iops'] = getattr(stats_data, 'controller_num_iops', 0)
+                    
+                    self._mark_success()
+                    return stats
+                else:
+                    logger.warning(f"No stats data returned for cluster {cluster_uuid}")
+                    return None
+                    
+            except (ClusterMgmtApiException, Exception) as stats_error:
+                # If statistics endpoint is not available, return None gracefully
+                logger.debug(f"Statistics not available for cluster {cluster_uuid}: {stats_error}")
+                return None
+            
         except Exception as e:
-            logger.error(f"Failed to get stats for cluster {cluster_uuid}: {e}")
+            logger.error(f"Error getting cluster stats for {cluster_uuid}: {e}")
             return None
     
     def get_host_stats(self, host_uuid: str) -> Optional[Dict]:
         """Get performance statistics for a specific host"""
         try:
-            endpoint = f"hosts/{host_uuid}/stats"
-            return self._make_request("GET", endpoint)
+            logger.debug(f"Fetching host stats for {host_uuid} using v4 SDK")
+            
+            # Create time range for the last 5 minutes
+            end_time = datetime.now()
+            start_time = end_time - timedelta(minutes=5)
+            
+            # Prepare the request parameters
+            kwargs = {
+                'ext_id': host_uuid,
+                '_stat_type': 'AVG',  # Average values
+                '_start_time': start_time.isoformat() + 'Z',
+                '_end_time': end_time.isoformat() + 'Z'
+            }
+            
+            try:
+                # Try to get host statistics
+                response = self.hosts_api.get_host_stats_by_id(**kwargs)
+                
+                if hasattr(response, 'data') and response.data:
+                    stats_data = response.data
+                    
+                    # Convert to the expected format
+                    stats = {}
+                    
+                    # Map v4 SDK stats to our expected format
+                    if hasattr(stats_data, 'hypervisor_cpu_usage_ppm'):
+                        stats['hypervisor_cpu_usage_ppm'] = getattr(stats_data, 'hypervisor_cpu_usage_ppm', 0)
+                    
+                    if hasattr(stats_data, 'hypervisor_memory_usage_ppm'):
+                        stats['hypervisor_memory_usage_ppm'] = getattr(stats_data, 'hypervisor_memory_usage_ppm', 0)
+                    
+                    if hasattr(stats_data, 'controller_avg_io_latency_usecs'):
+                        stats['controller_avg_io_latency_usecs'] = getattr(stats_data, 'controller_avg_io_latency_usecs', 0)
+                    
+                    if hasattr(stats_data, 'controller_io_bandwidth_kbps'):
+                        stats['controller_io_bandwidth_kBps'] = getattr(stats_data, 'controller_io_bandwidth_kbps', 0)
+                    
+                    if hasattr(stats_data, 'controller_num_iops'):
+                        stats['controller_num_iops'] = getattr(stats_data, 'controller_num_iops', 0)
+                    
+                    if hasattr(stats_data, 'hypervisor_num_vms'):
+                        stats['hypervisor_num_vms'] = getattr(stats_data, 'hypervisor_num_vms', 0)
+                    
+                    self._mark_success()
+                    return stats
+                else:
+                    logger.warning(f"No stats data returned for host {host_uuid}")
+                    return None
+                    
+            except (ClusterMgmtApiException, Exception) as stats_error:
+                # If statistics endpoint is not available, return None gracefully
+                logger.debug(f"Statistics not available for host {host_uuid}: {stats_error}")
+                return None
+            
         except Exception as e:
-            logger.error(f"Failed to get stats for host {host_uuid}: {e}")
+            logger.error(f"Error getting host stats for {host_uuid}: {e}")
             return None
     
     def get_vm_stats(self, vm_uuid: str) -> Optional[Dict]:
         """Get performance statistics for a specific VM"""
         try:
-            endpoint = f"vms/{vm_uuid}/stats"
-            return self._make_request("GET", endpoint)
+            logger.debug(f"Fetching VM stats for {vm_uuid} using v4 SDK")
+            
+            # Create time range for the last 5 minutes
+            end_time = datetime.now()
+            start_time = end_time - timedelta(minutes=5)
+            
+            # Prepare the request parameters
+            kwargs = {
+                'ext_id': vm_uuid,
+                '_stat_type': 'AVG',  # Average values
+                '_start_time': start_time.isoformat() + 'Z',
+                '_end_time': end_time.isoformat() + 'Z'
+            }
+            
+            try:
+                # Try to get VM statistics
+                response = self.vm_api.get_vm_stats_by_id(**kwargs)
+                
+                if hasattr(response, 'data') and response.data:
+                    stats_data = response.data
+                    
+                    # Convert to the expected format
+                    stats = {}
+                    
+                    # Map v4 SDK stats to our expected format
+                    if hasattr(stats_data, 'hypervisor_cpu_usage_ppm'):
+                        stats['hypervisor_cpu_usage_ppm'] = getattr(stats_data, 'hypervisor_cpu_usage_ppm', 0)
+                    
+                    if hasattr(stats_data, 'hypervisor_memory_usage_ppm'):
+                        stats['hypervisor_memory_usage_ppm'] = getattr(stats_data, 'hypervisor_memory_usage_ppm', 0)
+                    
+                    if hasattr(stats_data, 'storage_usage_bytes'):
+                        stats['storage_usage_bytes'] = getattr(stats_data, 'storage_usage_bytes', 0)
+                    
+                    self._mark_success()
+                    return stats
+                else:
+                    logger.warning(f"No stats data returned for VM {vm_uuid}")
+                    return None
+                    
+            except (VmmApiException, Exception) as stats_error:
+                # If statistics endpoint is not available, return None gracefully
+                logger.debug(f"Statistics not available for VM {vm_uuid}: {stats_error}")
+                return None
+            
         except Exception as e:
-            logger.error(f"Failed to get stats for VM {vm_uuid}: {e}")
+            logger.error(f"Error getting VM stats for {vm_uuid}: {e}")
             return None
     
     def close(self):
-        """Close the session and cleanup"""
-        if self.session:
-            self.session.close()
-            logger.debug("Nutanix API session closed")
+        """Close the API clients and cleanup"""
+        try:
+            # Close all API clients
+            if hasattr(self, 'clustermgmt_client'):
+                # Note: v4 SDK clients don't have explicit close methods
+                # but we can clear references
+                self.clustermgmt_client = None
+                self.clusters_api = None
+                self.hosts_api = None
+            
+            if hasattr(self, 'vmm_client'):
+                self.vmm_client = None
+                self.vm_api = None
+            
+            if hasattr(self, 'prism_client'):
+                self.prism_client = None
+            
+            logger.debug("Nutanix v4 SDK clients closed")
+            
+        except Exception as e:
+            logger.error(f"Error closing API clients: {e}")

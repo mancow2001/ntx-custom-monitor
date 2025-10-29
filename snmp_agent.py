@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
 """
-SNMP Agent Module
+SNMP Agent Module (Enhanced for v4 SDK)
 
 Implements SNMPv3 agent that exposes Nutanix performance data.
 Uses modern pysnmp 6.x API compatible with Python 3.10+
+Enhanced for v4 SDK with better error handling and performance.
 """
 
 import logging
 import threading
 import time
 import asyncio
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Any, Optional, List, Tuple, Union
 from ipaddress import ip_network, ip_address
+from datetime import datetime
 
 from pysnmp.entity import engine, config
 from pysnmp.entity.rfc3413 import cmdrsp, context
@@ -32,9 +34,13 @@ class NutanixMIBInstrumController(instrum.MibInstrumController):
     def __init__(self, mib_builder, snmp_agent):
         super().__init__(mib_builder)
         self.snmp_agent = snmp_agent
+        self.request_count = 0
+        self.last_request_time = None
         
     def readVars(self, varBinds, acInfo=(None, None)):
         """Handle SNMP GET requests"""
+        self.request_count += 1
+        self.last_request_time = datetime.now()
         result_vars = []
         
         for oid, val in varBinds:
@@ -47,9 +53,13 @@ class NutanixMIBInstrumController(instrum.MibInstrumController):
                     # Convert Python value to SNMP value
                     snmp_value = self._python_to_snmp_value(value)
                     result_vars.append((oid, snmp_value))
+                    
+                    # Log successful retrieval in debug mode
+                    logger.debug(f"SNMP GET {oid_str} -> {value}")
                 else:
                     # OID not found
                     result_vars.append((oid, rfc1902.noSuchInstance))
+                    logger.debug(f"SNMP GET {oid_str} -> noSuchInstance")
                     
             except Exception as e:
                 logger.error(f"Error reading OID {oid}: {e}")
@@ -59,6 +69,8 @@ class NutanixMIBInstrumController(instrum.MibInstrumController):
     
     def readNextVars(self, varBinds, acInfo=(None, None)):
         """Handle SNMP GETNEXT requests"""
+        self.request_count += 1
+        self.last_request_time = datetime.now()
         result_vars = []
         
         for oid, val in varBinds:
@@ -69,8 +81,10 @@ class NutanixMIBInstrumController(instrum.MibInstrumController):
                 if next_oid and next_value is not None:
                     snmp_value = self._python_to_snmp_value(next_value)
                     result_vars.append((rfc1902.ObjectName(next_oid), snmp_value))
+                    logger.debug(f"SNMP GETNEXT {oid_str} -> {next_oid} = {next_value}")
                 else:
                     result_vars.append((oid, rfc1902.endOfMibView))
+                    logger.debug(f"SNMP GETNEXT {oid_str} -> endOfMibView")
                     
             except Exception as e:
                 logger.error(f"Error reading next OID for {oid}: {e}")
@@ -81,16 +95,33 @@ class NutanixMIBInstrumController(instrum.MibInstrumController):
     def _python_to_snmp_value(self, value):
         """Convert Python value to appropriate SNMP value type"""
         if isinstance(value, int):
-            return rfc1902.Integer32(value)
+            # Handle large integers that might overflow
+            if value > 2**31 - 1:
+                return rfc1902.Counter64(value)
+            elif value < 0:
+                return rfc1902.Integer32(0)  # Convert negative to 0 for safety
+            else:
+                return rfc1902.Integer32(value)
         elif isinstance(value, float):
             # Convert float to integer (multiply by 100 for percentage precision)
-            return rfc1902.Integer32(int(value * 100))
+            int_value = int(value * 100)
+            if int_value > 2**31 - 1:
+                return rfc1902.Counter64(int_value)
+            else:
+                return rfc1902.Integer32(int_value)
         elif isinstance(value, str):
-            return rfc1902.OctetString(value)
+            return rfc1902.OctetString(value.encode('utf-8'))
         elif isinstance(value, bool):
             return rfc1902.Integer32(1 if value else 0)
         else:
-            return rfc1902.OctetString(str(value))
+            return rfc1902.OctetString(str(value).encode('utf-8'))
+    
+    def get_stats(self) -> Dict[str, Any]:
+        """Get controller statistics"""
+        return {
+            'request_count': self.request_count,
+            'last_request_time': self.last_request_time.isoformat() if self.last_request_time else None
+        }
 
 class SNMPAgent:
     """SNMP v3 Agent that exposes Nutanix performance data using modern pysnmp 6.x"""
@@ -99,6 +130,7 @@ class SNMPAgent:
         self.config = config
         self.snmp_config = config.get('snmp', {})
         self.security_config = config.get('security', {})
+        self.v4_sdk_config = config.get('v4_sdk', {})
         
         # SNMP configuration
         self.bind_ip = self.snmp_config.get('bind_ip', '0.0.0.0')
@@ -112,15 +144,17 @@ class SNMPAgent:
         self.auth_protocol = self._get_auth_protocol()
         self.priv_protocol = self._get_priv_protocol()
         
-        # Data storage
+        # Data storage with thread-safe access
         self.performance_data = {}
         self.data_lock = threading.RLock()
+        self.last_data_update = None
         
         # SNMP engine and event loop
         self.snmp_engine = None
         self.running = False
         self.loop = None
         self.transport = None
+        self.mib_controller = None
         
         # OID mapping for metrics
         self.oid_tree = {}
@@ -129,7 +163,15 @@ class SNMPAgent:
         # Security - allowed clients
         self.allowed_clients = self._parse_allowed_clients()
         
-        logger.info(f"SNMP agent initialized for {self.bind_ip}:{self.bind_port}")
+        # Performance tracking
+        self.start_time = None
+        self.total_requests = 0
+        self.error_count = 0
+        
+        # v4 SDK enhancements
+        self.sdk_metadata = {}
+        
+        logger.info(f"SNMP agent initialized for {self.bind_ip}:{self.bind_port} (v4 SDK enhanced)")
     
     def _get_auth_protocol(self):
         """Get authentication protocol"""
@@ -196,14 +238,19 @@ class SNMPAgent:
         self.cluster_base = f"{self.base_oid}.1.1"
         self.host_base = f"{self.base_oid}.2.1"
         self.vm_base = f"{self.base_oid}.3.1"
+        self.system_base = f"{self.base_oid}.99.1"  # System/SDK info
         
-        # Metric definitions
+        # Metric definitions - Enhanced for v4 SDK
         self.cluster_metrics = {
             1: 'cpu_usage_percent',
             2: 'memory_usage_percent',
             3: 'avg_io_latency_ms',
-            4: 'io_bandwidth_mbps',
-            5: 'iops'
+            4: 'avg_read_latency_ms',
+            5: 'avg_write_latency_ms',
+            6: 'io_bandwidth_mbps',
+            7: 'iops',
+            8: 'read_iops',
+            9: 'write_iops'
         }
         
         self.host_metrics = {
@@ -212,13 +259,28 @@ class SNMPAgent:
             3: 'avg_io_latency_ms',
             4: 'io_bandwidth_mbps',
             5: 'iops',
-            6: 'num_vms'
+            6: 'num_vms',
+            7: 'hypervisor_type',
+            8: 'host_state'
         }
         
         self.vm_metrics = {
             1: 'cpu_usage_percent',
             2: 'memory_usage_percent',
-            3: 'disk_usage_gb'
+            3: 'disk_usage_gb',
+            4: 'power_state',
+            5: 'vm_state'
+        }
+        
+        # System/SDK information OIDs
+        self.system_metrics = {
+            1: 'sdk_version',
+            2: 'api_healthy',
+            3: 'collection_time',
+            4: 'last_update_timestamp',
+            5: 'total_clusters',
+            6: 'total_hosts',
+            7: 'total_vms'
         }
     
     def setup_snmp_engine(self):
@@ -247,13 +309,13 @@ class SNMPAgent:
         
         # Setup MIB builder and instrumentation
         mib_builder = builder.MibBuilder()
-        mib_instrum = NutanixMIBInstrumController(mib_builder, self)
+        self.mib_controller = NutanixMIBInstrumController(mib_builder, self)
         
         # Register command responder
         cmdrsp.GetCommandResponder(self.snmp_engine, context.SnmpContext(self.snmp_engine))
         
         # Register the custom MIB controller
-        self.snmp_engine.msgAndPduDsp.mibInstrumController = mib_instrum
+        self.snmp_engine.msgAndPduDsp.mibInstrumController = self.mib_controller
         
         logger.info(f"SNMP engine configured on {self.bind_ip}:{self.bind_port}")
     
@@ -268,12 +330,15 @@ class SNMPAgent:
                     return self._get_host_metric(oid)
                 elif oid.startswith(self.vm_base):
                     return self._get_vm_metric(oid)
+                elif oid.startswith(self.system_base):
+                    return self._get_system_metric(oid)
                 else:
                     logger.debug(f"OID not in our tree: {oid}")
                     return None
                     
             except Exception as e:
                 logger.error(f"Error getting value for OID {oid}: {e}")
+                self.error_count += 1
                 return None
     
     def get_next_oid(self, oid: str) -> Tuple[Optional[str], Optional[Any]]:
@@ -294,6 +359,7 @@ class SNMPAgent:
                 
             except Exception as e:
                 logger.error(f"Error getting next OID for {oid}: {e}")
+                self.error_count += 1
                 return None, None
     
     def _get_all_oids(self) -> List[str]:
@@ -320,6 +386,11 @@ class SNMPAgent:
             for metric_id in self.vm_metrics.keys():
                 oid = f"{self.vm_base}.{i}.{metric_id}"
                 oids.append(oid)
+        
+        # Add system OIDs
+        for metric_id in self.system_metrics.keys():
+            oid = f"{self.system_base}.{metric_id}"
+            oids.append(oid)
         
         return oids
     
@@ -372,6 +443,13 @@ class SNMPAgent:
                 return None
             
             stats = host_data.get('stats', {})
+            
+            # Handle special cases for host metrics
+            if metric_name == 'hypervisor_type':
+                return host_data.get('name', 'Unknown')
+            elif metric_name == 'host_state':
+                return 1  # Assume online if we have data
+            
             return stats.get(metric_name)
             
         except (ValueError, IndexError):
@@ -399,7 +477,52 @@ class SNMPAgent:
                 return None
             
             stats = vm_data.get('stats', {})
+            
+            # Handle special cases for VM metrics
+            if metric_name == 'power_state':
+                return 1  # Assume powered on if we have data
+            elif metric_name == 'vm_state':
+                return 1  # Assume running if we have data
+            
             return stats.get(metric_name)
+            
+        except (ValueError, IndexError):
+            return None
+    
+    def _get_system_metric(self, oid: str) -> Optional[Any]:
+        """Get system/SDK metric value"""
+        # Parse OID: base.99.1.{metric_id}
+        parts = oid.split('.')
+        if len(parts) < 1:
+            return None
+        
+        try:
+            metric_id = int(parts[-1])
+            metric_name = self.system_metrics.get(metric_id)
+            
+            if not metric_name:
+                return None
+            
+            metadata = self.performance_data.get('metadata', {})
+            
+            if metric_name == 'sdk_version':
+                return 'v4.0'
+            elif metric_name == 'api_healthy':
+                return 1 if metadata.get('api_healthy', False) else 0
+            elif metric_name == 'collection_time':
+                return int(self.performance_data.get('collection_time', 0) * 100)  # centiseconds
+            elif metric_name == 'last_update_timestamp':
+                if self.last_data_update:
+                    return int(self.last_data_update.timestamp())
+                return 0
+            elif metric_name == 'total_clusters':
+                return len(self.performance_data.get('clusters', {}))
+            elif metric_name == 'total_hosts':
+                return len(self.performance_data.get('hosts', {}))
+            elif metric_name == 'total_vms':
+                return len(self.performance_data.get('vms', {}))
+            
+            return None
             
         except (ValueError, IndexError):
             return None
@@ -408,8 +531,17 @@ class SNMPAgent:
         """Update the performance data that SNMP agent will serve"""
         with self.data_lock:
             self.performance_data = stats
+            self.last_data_update = datetime.now()
+            
+            # Extract SDK metadata if available
+            metadata = stats.get('metadata', {})
+            self.sdk_metadata = {
+                'collector_version': metadata.get('collector_version', 'Unknown'),
+                'api_healthy': metadata.get('api_healthy', False),
+                'cache_enabled': metadata.get('cache_enabled', False)
+            }
         
-        logger.debug("Performance data updated in SNMP agent")
+        logger.debug("Performance data updated in SNMP agent (v4 SDK)")
     
     def start(self):
         """Start the SNMP agent using asyncio"""
@@ -417,7 +549,8 @@ class SNMPAgent:
             logger.warning("SNMP agent is already running")
             return
         
-        logger.info("Starting SNMP agent...")
+        logger.info("Starting SNMP agent (v4 SDK enhanced)...")
+        self.start_time = datetime.now()
         
         try:
             # Create new event loop for this thread
@@ -469,7 +602,11 @@ class SNMPAgent:
             host_count = len(self.performance_data.get('hosts', {}))
             vm_count = len(self.performance_data.get('vms', {}))
             
-            return {
+            uptime = None
+            if self.start_time:
+                uptime = (datetime.now() - self.start_time).total_seconds()
+            
+            stats = {
                 'running': self.running,
                 'bind_address': f"{self.bind_ip}:{self.bind_port}",
                 'username': self.username,
@@ -481,5 +618,47 @@ class SNMPAgent:
                 'vm_count': vm_count,
                 'total_oids': len(self._get_all_oids()),
                 'allowed_clients': len(self.allowed_clients),
-                'last_data_update': self.performance_data.get('timestamp', 'Never')
+                'last_data_update': self.last_data_update.isoformat() if self.last_data_update else 'Never',
+                'uptime_seconds': uptime,
+                'error_count': self.error_count,
+                'version': 'v4-SDK-Enhanced'
             }
+            
+            # Add controller stats if available
+            if self.mib_controller:
+                controller_stats = self.mib_controller.get_stats()
+                stats.update({
+                    'snmp_requests': controller_stats.get('request_count', 0),
+                    'last_snmp_request': controller_stats.get('last_request_time', 'Never')
+                })
+            
+            # Add SDK metadata
+            stats['sdk_metadata'] = self.sdk_metadata
+            
+            return stats
+    
+    def get_oid_map(self) -> Dict[str, str]:
+        """Get a mapping of OIDs to their descriptions for documentation"""
+        oid_map = {}
+        
+        # Add cluster OIDs
+        for metric_id, metric_name in self.cluster_metrics.items():
+            oid = f"{self.cluster_base}.X.{metric_id}"
+            oid_map[oid] = f"Cluster {metric_name} (X = cluster index)"
+        
+        # Add host OIDs
+        for metric_id, metric_name in self.host_metrics.items():
+            oid = f"{self.host_base}.X.{metric_id}"
+            oid_map[oid] = f"Host {metric_name} (X = host index)"
+        
+        # Add VM OIDs
+        for metric_id, metric_name in self.vm_metrics.items():
+            oid = f"{self.vm_base}.X.{metric_id}"
+            oid_map[oid] = f"VM {metric_name} (X = VM index)"
+        
+        # Add system OIDs
+        for metric_id, metric_name in self.system_metrics.items():
+            oid = f"{self.system_base}.{metric_id}"
+            oid_map[oid] = f"System {metric_name}"
+        
+        return oid_map
