@@ -15,7 +15,7 @@ import urllib3
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from config_manager import ConfigManager
-from nutanix_api_v4 import NutanixAPIClient
+from nutanix_api import NutanixAPIClient
 from snmp_agent import SNMPAgent
 
 # Disable SSL warnings
@@ -53,7 +53,7 @@ def test_config_loading(config_path=None):
         print(f"✗ Configuration loading failed: {e}")
         return False, None
 
-def test_v4_sdk_imports():
+def test_sdk_imports():
     """Test v4 SDK imports"""
     print("\nTesting v4 SDK imports...")
     
@@ -87,7 +87,7 @@ def test_v4_sdk_imports():
         print(f"✗ Unexpected error during SDK import: {e}")
         return False
 
-def test_nutanix_v4_connection(config):
+def test_nutanix_connection(config):
     """Test connection to Nutanix Prism Central using v4 SDK"""
     print("\nTesting Nutanix Prism Central connection (v4 SDK)...")
     
@@ -153,7 +153,7 @@ def test_nutanix_v4_connection(config):
         print("  - Firewall blocking connection")
         return False
 
-def test_v4_sdk_configuration(config):
+def test_sdk_configuration(config):
     """Test v4 SDK specific configuration"""
     print("\nTesting v4 SDK configuration...")
     
@@ -323,7 +323,7 @@ def test_permissions():
     except Exception:
         print(f"⚠ Log file test skipped (file system constraints)")
 
-def create_sample_v4_config():
+def create_sample_config():
     """Create a sample configuration file for v4 SDK testing"""
     sample_config = {
         'nutanix': {
@@ -395,7 +395,7 @@ def create_sample_v4_config():
         }
     }
     
-    config_file = './test_config_v4.yaml'
+    config_file = './test_config.yaml'
     with open(config_file, 'w') as f:
         yaml.dump(sample_config, f, default_flow_style=False, indent=2)
     
@@ -415,7 +415,7 @@ def main():
     # If no config provided, create a sample one
     if not config_path:
         print("No configuration file specified. Creating sample v4 SDK configuration...")
-        config_path = create_sample_v4_config()
+        config_path = create_sample_config()
         print("Please edit the configuration file with your actual settings before running the daemon.")
         print()
     
@@ -424,7 +424,7 @@ def main():
     config = None
     
     # Test v4 SDK imports first
-    sdk_import_success = test_v4_sdk_imports()
+    sdk_import_success = test_sdk_imports()
     success &= sdk_import_success
     
     if not sdk_import_success:
@@ -445,10 +445,10 @@ def main():
     
     # Test individual components
     success &= test_sdk_version_compatibility()
-    success &= test_v4_sdk_configuration(config)
+    success &= test_sdk_configuration(config)
     success &= test_snmp_configuration(config)
     success &= test_snmp_agent_creation(config)
-    success &= test_nutanix_v4_connection(config)
+    success &= test_nutanix_connection(config)
     
     # Test system permissions (informational)
     test_permissions()
@@ -459,7 +459,7 @@ def main():
         print("The v4 SDK daemon should work correctly with this configuration.")
         print()
         print("To start the daemon:")
-        print(f"  python3 nutanix_snmp_daemon_v4.py --config {config_path}")
+        print(f"  python3 nutanix_snmp_daemon.py --config {config_path}")
         print()
         print("Migration notes:")
         print("- The daemon now uses official Nutanix v4 SDK packages")
