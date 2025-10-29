@@ -376,11 +376,11 @@ install_daemon_files() {
     chmod +x $INSTALL_DIR/nutanix_snmp_daemon.py
     
     # Copy test script if it exists
-    if [ -f "test_v4_daemon.py" ]; then
-        cp test_v4_daemon.py $INSTALL_DIR/
-        chown $DAEMON_USER:$DAEMON_GROUP $INSTALL_DIR/test_v4_daemon.py
-        chmod +x $INSTALL_DIR/test_v4_daemon.py
-        echo "✓ Installed test_v4_daemon.py"
+    if [ -f "test_daemon.py" ]; then
+        cp test_daemon.py $INSTALL_DIR/
+        chown $DAEMON_USER:$DAEMON_GROUP $INSTALL_DIR/test_daemon.py
+        chmod +x $INSTALL_DIR/test_daemon.py
+        echo "✓ Installed test_daemon.py"
     fi
     
     echo "✓ Daemon files installed (v4 SDK version)"
@@ -391,8 +391,8 @@ install_configuration() {
     echo "Installing configuration file..."
     
     if [ ! -f $CONFIG_FILE ]; then
-        if [ -f "config_v4.yaml" ]; then
-            cp config_v4.yaml $CONFIG_FILE
+        if [ -f "config.yaml" ]; then
+            cp config.yaml $CONFIG_FILE
             chmod 640 $CONFIG_FILE
             chown root:$DAEMON_GROUP $CONFIG_FILE
             echo "✓ Configuration file installed at $CONFIG_FILE"
@@ -435,7 +435,7 @@ Type=simple
 User=$DAEMON_USER
 Group=$DAEMON_GROUP
 WorkingDirectory=$INSTALL_DIR
-ExecStart=$INSTALL_DIR/venv/bin/python3 $INSTALL_DIR/nutanix_snmp_daemon_v4.py --config $CONFIG_FILE
+ExecStart=$INSTALL_DIR/venv/bin/python3 $INSTALL_DIR/nutanix_snmp_daemon.py --config $CONFIG_FILE
 ExecReload=/bin/kill -HUP \$MAINPID
 KillMode=mixed
 KillSignal=SIGTERM
@@ -509,7 +509,7 @@ install_daemon() {
     echo ""
     echo "Next steps:"
     echo "1. Edit the configuration file: sudo nano $CONFIG_FILE"
-    echo "2. Test the configuration: sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/python3 $INSTALL_DIR/test_v4_daemon.py $CONFIG_FILE"
+    echo "2. Test the configuration: sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/python3 $INSTALL_DIR/test_daemon.py $CONFIG_FILE"
     echo "3. Enable the service: sudo systemctl enable nutanix-snmp-daemon"
     echo "4. Start the service: sudo systemctl start nutanix-snmp-daemon"
     echo "5. Check status: sudo systemctl status nutanix-snmp-daemon"
@@ -532,7 +532,7 @@ install_daemon() {
     echo "- Better performance and connection management"
     echo "- Enhanced statistics collection capabilities"
     echo ""
-    echo "For CLI options, run: sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/python3 $INSTALL_DIR/nutanix_snmp_daemon_v4.py --help"
+    echo "For CLI options, run: sudo -u $DAEMON_USER $INSTALL_DIR/venv/bin/python3 $INSTALL_DIR/nutanix_snmp_daemon.py --help"
 }
 
 # Function to fix dependencies
