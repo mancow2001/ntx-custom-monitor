@@ -75,8 +75,24 @@ class NutanixAPIClient:
     
     def __init__(self, config: Dict[str, Any]):
         self.config = config
-        self.prism_central_ip = config['prism_central_ip']
-        self.port = config.get('port', 9440)
+        
+        # FIXED: Handle cases where prism_central_ip might already include port or protocol
+        prism_central_ip = config['prism_central_ip']
+        
+        # Remove any protocol prefix if present
+        if '://' in prism_central_ip:
+            prism_central_ip = prism_central_ip.split('://', 1)[1]
+        
+        # Check if port is already in the hostname
+        if ':' in prism_central_ip:
+            # Port is already specified in the hostname
+            self.prism_central_ip = prism_central_ip.split(':', 1)[0]
+            self.port = int(prism_central_ip.split(':', 1)[1])
+            logger.debug(f"Extracted port {self.port} from prism_central_ip")
+        else:
+            self.prism_central_ip = prism_central_ip
+            self.port = config.get('port', 9440)
+        
         self.username = config['username']
         self.password = config['password']
         self.ssl_verify = config.get('ssl_verify', False)
@@ -113,17 +129,22 @@ class NutanixAPIClient:
     
     def _setup_sdk_configs(self):
         """Setup SDK configurations for all namespaces"""
-        # CORRECTED: Proper configuration setup for modern SDK
-        base_url = f"https://{self.prism_central_ip}:{self.port}"
+        # CORRECTED: The SDK Configuration expects ONLY the hostname, not hostname:port
+        # The SDK will construct the full URL internally
         
         # Cluster Management configuration
         if CLUSTERMGMT_AVAILABLE:
             self.clustermgmt_config = ClusterMgmtConfig()
-            self.clustermgmt_config.host = base_url
+            # CRITICAL FIX: Set host to hostname ONLY, SDK adds port internally
+            self.clustermgmt_config.host = self.prism_central_ip  # Just hostname, no port!
+            self.clustermgmt_config.port = self.port  # Port set separately if SDK supports it
             self.clustermgmt_config.username = self.username
             self.clustermgmt_config.password = self.password
             self.clustermgmt_config.verify_ssl = self.ssl_verify
             self.clustermgmt_config.connection_pool_maxsize = self.config.get('connection_pool_size', 5)
+            
+            logger.info(f"SDK Config - host: {self.clustermgmt_config.host}, port: {self.port}")
+            
             # IMPORTANT: Disable SSL warnings if SSL verification is disabled
             if not self.ssl_verify:
                 import urllib3
@@ -132,7 +153,8 @@ class NutanixAPIClient:
         # VMM configuration
         if VMM_AVAILABLE:
             self.vmm_config = VmmConfig()
-            self.vmm_config.host = base_url
+            self.vmm_config.host = self.prism_central_ip  # Just hostname, no port!
+            self.vmm_config.port = self.port  # Port set separately if SDK supports it
             self.vmm_config.username = self.username
             self.vmm_config.password = self.password
             self.vmm_config.verify_ssl = self.ssl_verify
@@ -141,7 +163,8 @@ class NutanixAPIClient:
         # Prism configuration
         if PRISM_AVAILABLE:
             self.prism_config = PrismConfig()
-            self.prism_config.host = base_url
+            self.prism_config.host = self.prism_central_ip  # Just hostname, no port!
+            self.prism_config.port = self.port  # Port set separately if SDK supports it
             self.prism_config.username = self.username
             self.prism_config.password = self.password
             self.prism_config.verify_ssl = self.ssl_verify
@@ -240,8 +263,12 @@ class NutanixAPIClient:
         
         return True
     
-    def get_clusters(self) -> List[Dict]:
-        """Get list of all clusters with pagination support - CORRECTED VERSION"""
+    def get_clusters(self, exclude_pc: bool = True) -> List[Dict]:
+        """Get list of all clusters with pagination support - CORRECTED VERSION
+        
+        Args:
+            exclude_pc: If True, excludes the Prism Central cluster itself (default: True)
+        """
         if not CLUSTERMGMT_AVAILABLE or not self.clusters_api:
             logger.warning("Cluster Management API not available")
             return []
@@ -250,7 +277,7 @@ class NutanixAPIClient:
             logger.debug("Fetching clusters using modern SDK")
             
             all_clusters = []
-            page = 1
+            page = 0  # FIXED: API uses 0-based page numbering!
             limit = 100  # Maximum allowed by API
             
             while True:
@@ -276,21 +303,45 @@ class NutanixAPIClient:
                 
                 # CORRECTED: Proper response handling
                 if response:
+                    # Debug: Log response type and attributes (using INFO so it shows up)
+                    logger.info(f"Response type: {type(response)}")
+                    logger.info(f"Response has 'data': {hasattr(response, 'data')}")
+                    logger.info(f"Response has 'entities': {hasattr(response, 'entities')}")
+                    if hasattr(response, 'data'):
+                        logger.info(f"response.data type: {type(response.data)}")
+                        logger.info(f"response.data is None: {response.data is None}")
+                        if response.data:
+                            logger.info(f"response.data length: {len(response.data) if hasattr(response.data, '__len__') else 'N/A'}")
+                    
                     # Check different possible response structures
                     if hasattr(response, 'data') and response.data:
                         cluster_list = response.data
+                        logger.info(f"Using response.data, found {len(cluster_list) if cluster_list else 0} clusters")
                     elif hasattr(response, 'entities'):
                         cluster_list = response.entities
+                        logger.info(f"Using response.entities, found {len(cluster_list) if cluster_list else 0} clusters")
                     elif isinstance(response, list):
                         cluster_list = response
+                        logger.info(f"Response is list, found {len(cluster_list)} clusters")
                     else:
                         cluster_list = [response]
+                        logger.info(f"Using response as single item")
                     
                     # If no results, we're done
                     if not cluster_list:
+                        logger.warning("cluster_list is empty or None")
                         break
                     
                     for cluster in cluster_list:
+                        # Check if this is a Prism Central cluster
+                        is_pc_cluster = self._is_prism_central_cluster(cluster)
+                        
+                        if exclude_pc and is_pc_cluster:
+                            cluster_name = self._safe_get_attr(cluster, ['name', 'cluster_name'])
+                            cluster_uuid = self._safe_get_attr(cluster, ['ext_id', 'uuid', 'id'])
+                            logger.info(f"Skipping Prism Central cluster: {cluster_name} ({cluster_uuid})")
+                            continue
+                        
                         # CORRECTED: Proper attribute extraction
                         cluster_dict = {
                             'metadata': {
@@ -302,7 +353,8 @@ class NutanixAPIClient:
                             },
                             'status': {
                                 'state': 'COMPLETE'  # Assume complete for listed clusters
-                            }
+                            },
+                            'is_pc_cluster': is_pc_cluster
                         }
                         
                         # Only add if we have a valid UUID
@@ -320,7 +372,7 @@ class NutanixAPIClient:
                     break
             
             self._mark_success()
-            logger.info(f"Retrieved {len(all_clusters)} clusters using modern SDK")
+            logger.info(f"Retrieved {len(all_clusters)} clusters using modern SDK (exclude_pc={exclude_pc})")
             return all_clusters
             
         except (ClusterMgmtApiException, Exception) as e:
@@ -339,7 +391,7 @@ class NutanixAPIClient:
             logger.debug("Fetching hosts using modern SDK")
             
             all_hosts = []
-            page = 1
+            page = 0  # FIXED: API uses 0-based page numbering!
             limit = 100  # Maximum allowed by API
             
             while True:
@@ -428,7 +480,7 @@ class NutanixAPIClient:
             logger.debug("Fetching VMs using modern SDK")
             
             all_vms = []
-            page = 1
+            page = 0  # FIXED: API uses 0-based page numbering!
             limit = 100  # Maximum allowed by API
             
             while True:
@@ -518,8 +570,52 @@ class NutanixAPIClient:
                 continue
         return None
     
+    def _is_prism_central_cluster(self, cluster) -> bool:
+        """Check if a cluster is a Prism Central cluster
+        
+        Prism Central clusters typically have:
+        - cluster_function set to 'PRISM_CENTRAL' or similar
+        - is_lts = True (Long Term Support)
+        - Different cluster types/properties than Prism Element clusters
+        """
+        try:
+            # Method 1: Check cluster_function attribute
+            cluster_function = self._safe_get_attr(cluster, ['cluster_function', 'function', 'cluster_type'])
+            if cluster_function and 'PRISM_CENTRAL' in str(cluster_function).upper():
+                return True
+            
+            # Method 2: Check is_lts (Long Term Support - typically PC clusters)
+            is_lts = getattr(cluster, 'is_lts', None)
+            if is_lts is True:
+                return True
+            
+            # Method 3: Check if cluster name matches PC patterns
+            cluster_name = self._safe_get_attr(cluster, ['name', 'cluster_name'])
+            if cluster_name:
+                pc_patterns = ['prism central', 'prismcentral', 'pc-', 'pc_']
+                cluster_name_lower = cluster_name.lower()
+                if any(pattern in cluster_name_lower for pattern in pc_patterns):
+                    logger.debug(f"Cluster '{cluster_name}' matches PC name pattern")
+                    return True
+            
+            # Method 4: Check config object for PC indicators
+            config = getattr(cluster, 'config', None)
+            if config:
+                service_list = getattr(config, 'service_list', None)
+                if service_list and 'PRISM_CENTRAL' in str(service_list):
+                    return True
+            
+            return False
+            
+        except Exception as e:
+            logger.debug(f"Error checking if cluster is PC: {e}")
+            return False
+    
     def get_cluster_stats(self, cluster_uuid: str) -> Optional[Dict]:
-        """Get performance statistics for a specific cluster"""
+        """Get performance statistics for a specific cluster
+        
+        Note: This method does not work for Prism Central clusters, only Prism Element clusters.
+        """
         if not CLUSTERMGMT_AVAILABLE or not self.clusters_api:
             logger.debug("Cluster Management API not available for stats")
             return None
@@ -531,35 +627,42 @@ class NutanixAPIClient:
             end_time = datetime.now()
             start_time = end_time - timedelta(minutes=5)
             
-            # Try different possible methods for getting stats
-            stats_methods = [
-                'get_cluster_stats_by_id',
-                'get_cluster_stats',
-                'get_stats_by_id',
-                'list_cluster_stats'
-            ]
-            
-            for method_name in stats_methods:
-                if hasattr(self.clusters_api, method_name):
-                    try:
-                        method = getattr(self.clusters_api, method_name)
-                        response = method(cluster_uuid)
-                        
-                        if response:
-                            # Process the response
-                            stats = self._process_stats_response(response)
-                            if stats:
-                                self._mark_success()
-                                return stats
-                    except Exception as e:
-                        logger.debug(f"Method {method_name} failed: {e}")
-                        continue
+            # Try the correct method with required parameters
+            if hasattr(self.clusters_api, 'get_cluster_stats'):
+                try:
+                    # FIXED: Format timestamps as ISO 8601 strings, not Unix timestamps
+                    start_time_str = start_time.strftime('%Y-%m-%dT%H:%M:%SZ')
+                    end_time_str = end_time.strftime('%Y-%m-%dT%H:%M:%SZ')
+                    
+                    response = self.clusters_api.get_cluster_stats(
+                        cluster_uuid,
+                        _startTime=start_time_str,
+                        _endTime=end_time_str
+                    )
+                    
+                    if response:
+                        stats = self._process_stats_response(response)
+                        if stats:
+                            self._mark_success()
+                            return stats
+                except Exception as e:
+                    error_msg = str(e)
+                    # Check if this is the "not supported on PC cluster" error
+                    if 'not supported on PC cluster' in error_msg or 'CLU-10008' in error_msg:
+                        logger.debug(f"Cluster {cluster_uuid} is a Prism Central cluster - stats not available")
+                        return None
+                    else:
+                        logger.debug(f"get_cluster_stats failed: {e}")
             
             logger.debug(f"No stats methods available for cluster {cluster_uuid}")
             return None
             
         except Exception as e:
-            logger.error(f"Error getting cluster stats for {cluster_uuid}: {e}")
+            error_msg = str(e)
+            if 'not supported on PC cluster' in error_msg or 'CLU-10008' in error_msg:
+                logger.debug(f"Cluster {cluster_uuid} is a Prism Central cluster - stats not available")
+            else:
+                logger.error(f"Error getting cluster stats for {cluster_uuid}: {e}")
             return None
     
     def get_host_stats(self, host_uuid: str) -> Optional[Dict]:

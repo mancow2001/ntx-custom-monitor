@@ -17,12 +17,40 @@ from datetime import datetime
 
 from pysnmp.entity import engine, config
 from pysnmp.entity.rfc3413 import cmdrsp, context
-from pysnmp.carrier.asyncio import dgram
 from pysnmp.smi import builder, view, instrum
 from pysnmp.proto.api import v2c
 from pysnmp.proto import rfc1902
 
+# pysnmp 6.x uses different import structure for asyncio transport
+try:
+    # Try pysnmp 6.x style - imports udp directly
+    from pysnmp.carrier.asyncio.dgram import udp
+    dgram = None  # Not used in v6
+    PYSNMP_ASYNCIO = True
+    PYSNMP_VERSION = 6
+except ImportError:
+    try:
+        # Try older pysnmp 5.x/4.x style - uses dgram module
+        from pysnmp.carrier.asyncio import dgram
+        udp = None  # Not used in v5 style
+        PYSNMP_ASYNCIO = True
+        PYSNMP_VERSION = 5
+    except ImportError:
+        try:
+            # Fallback to asyncore for very old versions
+            from pysnmp.carrier.asyncore.dgram import udp
+            dgram = None  # Not used in v4
+            PYSNMP_ASYNCIO = False
+            PYSNMP_VERSION = 4
+        except ImportError:
+            # Last resort - try to import dgram from asyncore
+            from pysnmp.carrier.asyncore import dgram
+            udp = None
+            PYSNMP_ASYNCIO = False
+            PYSNMP_VERSION = 4
+
 logger = logging.getLogger(__name__)
+logger.info(f"pysnmp version detected: {PYSNMP_VERSION}, asyncio support: {PYSNMP_ASYNCIO}")
 
 class SNMPAgentError(Exception):
     """Custom exception for SNMP agent errors"""
@@ -286,12 +314,19 @@ class SNMPAgent:
         """Configure SNMP engine with SNMPv3 settings"""
         self.snmp_engine = engine.SnmpEngine()
         
-        # Setup transport endpoint using asyncio
-        self.transport = dgram.UdpTransport().openServerMode((self.bind_ip, self.bind_port))
+        # Setup transport endpoint - pysnmp 6.x vs 5.x compatibility
+        if PYSNMP_VERSION >= 6:
+            # pysnmp 6.x style - uses udp module directly
+            self.transport = udp.UdpTransport().openServerMode((self.bind_ip, self.bind_port))
+            transport_domain = udp.domainName
+        else:
+            # pysnmp 5.x style - uses dgram module
+            self.transport = dgram.UdpTransport().openServerMode((self.bind_ip, self.bind_port))
+            transport_domain = dgram.domainName
         
         config.addTransport(
             self.snmp_engine,
-            dgram.domainName,
+            transport_domain,
             self.transport
         )
         
@@ -316,7 +351,7 @@ class SNMPAgent:
         # Register the custom MIB controller
         self.snmp_engine.msgAndPduDsp.mibInstrumController = self.mib_controller
         
-        logger.info(f"SNMP engine configured on {self.bind_ip}:{self.bind_port}")
+        logger.info(f"SNMP engine configured on {self.bind_ip}:{self.bind_port} (pysnmp v{PYSNMP_VERSION})")
     
     def get_oid_value(self, oid: str) -> Optional[Any]:
         """Get value for a specific OID"""
@@ -552,24 +587,50 @@ class SNMPAgent:
         self.start_time = datetime.now()
         
         try:
-            # Create new event loop for this thread
-            self.loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(self.loop)
-            
-            # Setup SNMP engine
-            self.setup_snmp_engine()
-            self.running = True
-            
-            # Run the event loop
-            self.loop.run_forever()
+            # Handle asyncio differently based on pysnmp version
+            if PYSNMP_ASYNCIO:
+                # pysnmp 6.x and 5.x with asyncio support
+                logger.info("Using asyncio event loop for SNMP engine")
+                
+                # CRITICAL: Create event loop BEFORE setting up SNMP engine
+                # because pysnmp 6.x needs an active event loop during setup
+                self.loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(self.loop)
+                
+                # Now setup SNMP engine with event loop available
+                self.setup_snmp_engine()
+                self.running = True
+                
+                logger.info(f"SNMP agent listening on {self.bind_ip}:{self.bind_port}")
+                logger.info(f"Transport object: {type(self.transport)}")
+                
+                # Run the event loop - pysnmp registers its handlers with asyncio
+                self.loop.run_forever()
+            else:
+                # pysnmp 4.x with asyncore - use different approach
+                logger.info("Using asyncore for SNMP engine (legacy mode)")
+                
+                # Setup SNMP engine first for asyncore
+                self.setup_snmp_engine()
+                self.running = True
+                
+                logger.info(f"SNMP agent listening on {self.bind_ip}:{self.bind_port}")
+                
+                import asyncore
+                # Run asyncore dispatcher
+                asyncore.loop()
             
         except Exception as e:
             logger.error(f"Failed to start SNMP agent: {e}")
+            logger.debug(f"Exception details: {e.__class__.__name__}: {e}", exc_info=True)
             self.running = False
             raise SNMPAgentError(f"SNMP agent startup failed: {e}")
         finally:
-            if self.loop:
-                self.loop.close()
+            if hasattr(self, 'loop') and self.loop and hasattr(self.loop, 'close'):
+                try:
+                    self.loop.close()
+                except Exception:
+                    pass
     
     def stop(self):
         """Stop the SNMP agent"""
